@@ -48,7 +48,8 @@ function pick(text, names) {
     const b = byName.get(n);
     if (!b) throw new Error('unknown shared declaration: ' + n);
     keep.add(n);
-    const body = b.lines.join('\n');
+    // Dependencies are found in code lines only (not in comments).
+    const body = b.lines.filter((l) => !/^\s*(\/\/|\/\*\*|\*)/.test(l)).join('\n');
     for (const other of byName.keys()) if (other !== n && new RegExp('\\b' + other + '\\b').test(body)) visit(other);
   };
   names.forEach(visit);

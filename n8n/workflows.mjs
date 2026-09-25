@@ -352,7 +352,8 @@ function definitions() {
       code('Build Repair Request', 'b_build_repair.js'),
       model('R4 Call Model', '$json.state.request'),
       code('R4 Parse Response', 'b_parse_response.R4.js'),
-      pg('Submit Result', `SELECT app.submit_ai_result((s->>'job_id')::uuid, s->>'decision', s->>'reply_text', nullif(s->>'handoff_reason', ''), s->'references', s->'result') AS r
+      pg('Submit Result', `SELECT app.submit_ai_result((s->>'job_id')::uuid, s->>'decision', s->>'reply_text', nullif(s->>'handoff_reason', ''), s->'references', s->'result') AS r,
+         (SELECT conversation_id FROM app.ai_jobs WHERE id = (s->>'job_id')::uuid) AS conversation_id, nullif(s->>'handoff_reason', '') AS handoff_reason
        FROM (SELECT $1::jsonb->'submit' AS s) x`, '$json', { sample: { submit: { job_id: UUID, decision: 'no_reply', references: [], result: {} } } }),
       pg('Record Usage', `SELECT count(app.record_ai_usage((p->>'job_id')::uuid, coalesce(u->>'purpose', 'reply'), u)) AS recorded
        FROM ${jsonParam()}, jsonb_array_elements(coalesce(p->'usage', '[]')) u`, '{ job_id: $json.job_id, usage: $json.usage }', { sample: { job_id: UUID, usage: [] } }),
@@ -600,11 +601,14 @@ function toN8nJson(key, def) {
   return { name: def.name, nodes, connections, settings: { executionOrder: 'v1', ...(def.settings || {}) }, pinData: {}, meta: { templateCredsSetupCompleted: false } };
 }
 
-function toSdk(key, def) {
+// placeholders: Code nodes get a one-line stub; their code is then set with
+// update_workflow setNodeParameter('/jsCode') (keeps each MCP call small).
+function toSdk(key, def, placeholders = false) {
   const vars = new Map(def.nodes.map((n, i) => [n.name, 'n' + i]));
   const lines = ["import { workflow, node, trigger, newCredential } from '@n8n/workflow-sdk';", ''];
   for (const n of def.nodes) {
-    const config = { name: n.name, parameters: n.parameters };
+    const parameters = placeholders && n.codeFile ? { jsCode: '// code from n8n/code/dist/' + n.codeFile + ' is set in a follow-up update\nreturn [];' } : n.parameters;
+    const config = { name: n.name, parameters };
     for (const k of ['onError', 'executeOnce', 'alwaysOutputData']) if (n[k] !== undefined) config[k] = n[k];
     let cfg = JSON.stringify(config);
     if (n.credentials) {
@@ -612,9 +616,12 @@ function toSdk(key, def) {
       const credCode = c.id ? JSON.stringify({ id: c.id, name: c.name }) : 'newCredential(' + JSON.stringify(c.name) + ')';
       cfg = cfg.slice(0, -1) + ',"credentials":{' + JSON.stringify(type) + ':' + credCode + '}}';
     }
+    // ASCII-only output (\uXXXX escapes): the code is copied through tool calls,
+    // and escapes keep Bangla code points exact.
+    cfg = cfg.replace(/[\u007f-\uffff]/g, (ch) => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
     lines.push(`const ${vars.get(n.name)} = ${n.trigger ? 'trigger' : 'node'}({ type: ${JSON.stringify(n.type)}, version: ${n.version}, config: ${cfg} });`);
   }
-  lines.push('', `export default workflow(${JSON.stringify(key)}, ${JSON.stringify(def.name)})`);
+  lines.push('', `export default workflow(${JSON.stringify(key)}, ${JSON.stringify(def.name).replace(/[\u007f-\uffff]/g, (ch) => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'))})`);
   for (const n of def.nodes) lines.push(`  .add(${vars.get(n.name)})`);
   for (const [f, oi, t, ti] of def.edges) lines.push(`  .add(${vars.get(f)}.output(${oi}).to(${vars.get(t)}.input(${ti || 0})))`);
   return lines.join('\n') + ';\n';
@@ -634,7 +641,7 @@ export async function generate() {
   const realIds = { ...ids };
   for (const k of ORDER) if (!ids[k]) ids[k] = 'PENDING_' + k;
   const defs = definitions();
-  for (const k of ORDER) out[k] = { def: defs[k], json: toN8nJson(k, defs[k]), sdk: toSdk(k, defs[k]), pendingDeps: [] };
+  for (const k of ORDER) out[k] = { def: defs[k], json: toN8nJson(k, defs[k]), sdk: toSdk(k, defs[k]), sdkStub: toSdk(k, defs[k], true), pendingDeps: [] };
   for (const k of ORDER) {
     out[k].pendingDeps = defs[k].nodes.filter((n) => n.type === 'n8n-nodes-base.executeWorkflow' && String(n.parameters.workflowId.value).startsWith('PENDING_'))
       .map((n) => n.parameters.workflowId.value.slice(8));
@@ -657,7 +664,13 @@ if (process.argv[1] && process.argv[1].endsWith('workflows.mjs')) {
   if (sdkIdx > 0) {
     const dir = process.argv[sdkIdx + 1];
     await mkdir(dir, { recursive: true });
-    for (const k of ORDER) await writeFile(path.join(dir, k + '.sdk.js'), g[k].sdk);
+    for (const k of ORDER) {
+      await writeFile(path.join(dir, k + '.sdk.js'), g[k].sdk);
+      await writeFile(path.join(dir, k + '.stub.sdk.js'), g[k].sdkStub);
+      // One setNodeParameter operation per Code node, for update_workflow.
+      const ops = g[k].def.nodes.filter((n) => n.codeFile).map((n) => ({ type: 'setNodeParameter', nodeName: n.name, path: '/jsCode', value: n.parameters.jsCode }));
+      await writeFile(path.join(dir, k + '.code-ops.json'), JSON.stringify(ops, null, 1));
+    }
   }
   const pending = ORDER.filter((k) => g[k].pendingDeps.length).map((k) => k + ' -> ' + g[k].pendingDeps.join(','));
   console.log(`wrote ${ORDER.length} workflows` + (pending.length ? `; waiting for ids: ${pending.join('; ')}` : ''));

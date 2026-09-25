@@ -297,7 +297,7 @@ describe('workflow export fidelity', () => {
     const distFiles = new Map(readdirSync(dist).map((f) => [f, readFileSync(path.join(dist, f), 'utf8')]));
     const manifest = JSON.parse(readFileSync(path.join(dir, 'code-nodes.json'), 'utf8')) as Record<string, Record<string, string>>;
     let checked = 0;
-    for (const f of readdirSync(dir).filter((x) => x.endsWith('.json') && x !== 'code-nodes.json')) {
+    for (const f of readdirSync(dir).filter((x) => x.endsWith('.json') && !['code-nodes.json', 'ids.json'].includes(x))) {
       const wf = JSON.parse(readFileSync(path.join(dir, f), 'utf8'));
       for (const n of wf.nodes.filter((x: any) => x.type === 'n8n-nodes-base.code')) {
         const src = manifest[f]?.[n.name];

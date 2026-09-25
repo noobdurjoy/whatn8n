@@ -77,20 +77,6 @@ function redactSecrets(input) {
 function redactSecretsText(input) {
   return redactSecrets(input).text;
 }
-
-function redactPersonal(input) {
-  let s = redactSecretsText(input);
-  if (s === null || s === undefined) return s;
-  s = s.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[EMAIL]');
-  s = s.replace(/(?:\+?88[\s-]?)?\b01[3-9](?:[\s-]?\d){8}\b/g, '[PHONE]');
-  s = s.replace(/(?:\+|\b00)\d(?:[\s-]?\d){8,14}\b/g, '[PHONE]');
-  s = s.replace(/[০-৯]{11}/g, '[PHONE]');
-  s = s.replace(/(?:order|অর্ডার|ordar)\s*(?:no\.?|number|nomber|#|নং|নম্বর)?\s*[:#]?\s*\d{3,}/gi, '[ORDER]');
-  s = s.replace(/#\d{3,}/g, '[ORDER]');
-  s = s.replace(/\b(?:trx|txn|transaction|trxid|txnid|ট্রানজেকশন)\s*(?:id|আইডি)?\s*[:#-]?\s*[A-Z0-9]{6,}\b/gi, '[TRANSACTION]');
-  s = s.replace(/\b[A-Z0-9]{10}\b/g, (m) => (/\d/.test(m) && /[A-Z]/.test(m) ? '[TRANSACTION]' : m));
-  return s;
-}
 // ---- end shared/redact.js ----
 // ---- begin shared/escalation.js (isWithinBusinessHours) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Business hours check in the shop's timezone. hours.days: { mon: ['10:00','22:00'], ... }
