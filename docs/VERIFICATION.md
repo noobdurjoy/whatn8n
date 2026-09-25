@@ -11,11 +11,11 @@ No other test results are claimed.
 
 | Item | How |
 | --- | --- |
-| OpenRouter chat model `deepseek/deepseek-v4.1-flash` | Real calls through an n8n OpenRouter credential. Tool calling with the allowlisted tools worked, final answers came back as structured JSON, and usage and cost fields were returned. These ran before the dedicated **IDS OpenRouter** key existed, so they must be repeated with that key (connection check, below) |
-| OpenRouter vision model `qwen/qwen3.7-flash` | A real image was sent as a base64 data URL with the vision prompt. It returned valid JSON observations, which the vision validator accepted. Same caveat about the key |
+| OpenRouter chat model `deepseek/deepseek-v4.1-flash` | Real calls: tool calling with the allowlisted tools, structured JSON answers, usage and cost fields. Repeated with **IDS OpenRouter** (below) |
+| OpenRouter vision model `qwen/qwen3.7-flash` | A real image sent as a base64 data URL; valid JSON observations accepted by the validator. Repeated with **IDS OpenRouter** (below) |
 | WooCommerce Store API (public) | Product search, product details and variations for infinitydigitalshop.com, fetched from n8n. Confirmed facts: <ul><li>prices are in minor units (BDT, 2 decimals);</li><li>variation items carry `parent` and `variation`, with empty `attributes`;</li><li>`add_to_cart.url` has the exact variation query.</li></ul> |
-| WooCommerce REST (read key) | Connection check on the instance (execution 95, 2026-09-25): `IDS WooCommerce Read` listed a product from infinitydigitalshop.com; the Store API check returned products with BDT prices. The other checks failed only because their credentials do not exist yet |
-| Workflow upload | The single workflow **Infinity Digital Shop — WhatsApp AI Support** exists on `n8n.wamsg.site` as `CAUTLyiBxlIyAydL`, **unpublished**. All 292 nodes are present. The Telegram nodes are bound by id to **IDS Telegram Admin** (@IDSShopAdminBot); the WooCommerce nodes to **IDS WooCommerce Read**, and *Write Stock* alone to **IDS WooCommerce Stock**. No node is bound to another project's credential |
+| Connection check with the IDS credentials | Run on the instance (execution 98, 2026-09-25). It sends nothing to WhatsApp and changes nothing. Passed: <ul><li>**IDS OpenRouter** chat (`deepseek/deepseek-v4.1-flash` called `search_products` with `{"query":"netflix"}`, usage returned);</li><li>**IDS OpenRouter** vision (`qwen/qwen3.7-flash` given a real 684 KB shop product image, validator passed, `product_photo`, read "Netflix Gift Card Bangladesh");</li><li>**IDS Zernio** (1 account, 1 WhatsApp account);</li><li>**IDS WooCommerce Read** (REST product read);</li><li>WooCommerce Store API (products with BDT prices).</li></ul>Failed only because they are not deployed yet: PostgreSQL, backend health, backend token. Execution 96 had found that Qwen spent 393 of 400 tokens reasoning and answered `{}`. Both vision requests now use low, hidden reasoning and a 1200-token limit. Execution 97 hit a provider 429; execution 98 passed |
+| Workflow upload | The single workflow **Infinity Digital Shop — WhatsApp AI Support** exists on `n8n.wamsg.site` as `CAUTLyiBxlIyAydL`, **unpublished**. All 292 nodes are present. The Telegram nodes are bound by id to **IDS Telegram Admin** (@IDSShopAdminBot); the model nodes to **IDS OpenRouter**, the Zernio nodes to **IDS Zernio**, the WooCommerce nodes to **IDS WooCommerce Read**, and *Write Stock* alone to **IDS WooCommerce Stock**. No node is bound to another project's credential |
 
 ## Verified locally (real PostgreSQL 16, real n8n, mocked providers)
 
@@ -33,7 +33,7 @@ Each of these needs the owner's credentials or a deployment.
 
 | Item | Why | What to do |
 | --- | --- | --- |
-| IDS credentials | Still missing in n8n: IDS OpenRouter, IDS Zernio, IDS Postgres (wa_n8n), IDS Inbound Token and IDS Backend Token | SETUP §5; then send the credential names back so the nodes can be bound by id |
+| IDS credentials | Still missing in n8n: IDS Postgres (wa_n8n), IDS Inbound Token and IDS Backend Token (they need the deployed database and backend) | SETUP §5; then send the credential names back so the nodes can be bound by id |
 | Telegram bot | No bot token yet, so the bot username is unknown and pairing is untested live | Create the bot with @BotFather, store its token as **IDS Telegram Admin**, then pair (SETUP §6a) |
 | Database and dashboard hosting | Not deployed. From this environment SSH to the VPS is blocked, so it cannot be deployed from here | Run `docker compose up -d` on the VPS (SETUP §3–4) |
 | Zernio webhook, send, media, message list | Built from Zernio's published spec; no live message sent | Go-live checklist with a test phone. Keep automatic replies off until COPILOT is verified |
