@@ -1,0 +1,46 @@
+{
+  "id": "evt_in_0004",
+  "event": "message.received",
+  "timestamp": "2026-09-25T10:00:00Z",
+  "message": {
+    "id": "msg_in_0004",
+    "conversationId": "conv_000000000000000000000001",
+    "platform": "whatsapp",
+    "platformMessageId": "wamid.IN0004",
+    "direction": "incoming",
+    "text": "ei error ta ashche, ki korbo?",
+    "attachments": [
+      {
+        "type": "image",
+        "mimeType": "image/jpeg",
+        "url": "https://zernio.com/api/v1/whatsapp/media/MEDIA_ID_0001?accountId=acc_000000000000000000000001"
+      }
+    ],
+    "sender": {
+      "id": "8801711111111",
+      "name": "Sample Customer",
+      "phoneNumber": "+8801711111111",
+      "businessScopedUserId": "BD.0000000000000001",
+      "contactId": "contact_0001"
+    },
+    "sentAt": "2026-09-25T10:00:00Z",
+    "isRead": false,
+    "sentVia": null
+  },
+  "conversation": {
+    "id": "conv_000000000000000000000001",
+    "platformConversationId": "8801711111111",
+    "participantId": "8801711111111",
+    "participantName": "Sample Customer",
+    "status": "active",
+    "contactId": "contact_0001"
+  },
+  "account": {
+    "id": "acc_000000000000000000000001",
+    "accountId": "acc_000000000000000000000001",
+    "profileId": "prof_0001",
+    "platform": "whatsapp",
+    "username": "+8801700000000",
+    "displayName": "Sample Shop"
+  }
+}

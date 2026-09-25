@@ -1,0 +1,36 @@
+{
+  "id": "evt_st_0001",
+  "event": "message.delivered",
+  "timestamp": "2026-09-25T10:02:00Z",
+  "statusAt": "2026-09-25T10:02:00Z",
+  "message": {
+    "id": "msg_status",
+    "conversationId": "conv_000000000000000000000001",
+    "platform": "whatsapp",
+    "platformMessageId": "wamid.OUT0001",
+    "direction": "outgoing",
+    "text": null,
+    "attachments": [],
+    "sender": {
+      "id": "acc_000000000000000000000001"
+    },
+    "sentAt": "2026-09-25T10:01:00Z",
+    "isRead": false
+  },
+  "conversation": {
+    "id": "conv_000000000000000000000001",
+    "platformConversationId": "8801711111111",
+    "participantId": "8801711111111",
+    "participantName": "Sample Customer",
+    "status": "active",
+    "contactId": "contact_0001"
+  },
+  "account": {
+    "id": "acc_000000000000000000000001",
+    "accountId": "acc_000000000000000000000001",
+    "profileId": "prof_0001",
+    "platform": "whatsapp",
+    "username": "+8801700000000",
+    "displayName": "Sample Shop"
+  }
+}

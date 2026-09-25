@@ -1,0 +1,30 @@
+{
+  "id": "evt_rx_0001",
+  "event": "reaction.received",
+  "timestamp": "2026-09-25T10:03:00Z",
+  "reaction": {
+    "emoji": "👍",
+    "action": "added",
+    "platformMessageId": "wamid.OUT0001",
+    "sender": {
+      "id": "8801711111111"
+    },
+    "reactedAt": "2026-09-25T10:03:00Z"
+  },
+  "conversation": {
+    "id": "conv_000000000000000000000001",
+    "platformConversationId": "8801711111111",
+    "participantId": "8801711111111",
+    "participantName": "Sample Customer",
+    "status": "active",
+    "contactId": "contact_0001"
+  },
+  "account": {
+    "id": "acc_000000000000000000000001",
+    "accountId": "acc_000000000000000000000001",
+    "profileId": "prof_0001",
+    "platform": "whatsapp",
+    "username": "+8801700000000",
+    "displayName": "Sample Shop"
+  }
+}
