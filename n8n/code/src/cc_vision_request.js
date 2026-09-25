@@ -31,5 +31,7 @@ return [{ json: {
     // Same settings as customer images ("Prepare Vision Request").
     reasoning: { max_tokens: 256, exclude: true },
     max_tokens: 1200,
+    temperature: 0.1,
+    provider: { require_parameters: true },
   },
 } }];
