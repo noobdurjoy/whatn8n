@@ -3,6 +3,7 @@
   "Telegram Update Input": "tg_input.js",
   "Reply: pair": "tg_reply.pair.js",
   "Reply: unauthorized": "tg_reply.unauthorized.js",
+  "Reply: draft": "tg_reply.draft.js",
   "Parse Command": "tg_parse.js",
   "Build Command Request": "tg_model_request.js",
   "Check Proposed Action": "tg_model_check.js",

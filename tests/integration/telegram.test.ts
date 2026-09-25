@@ -281,3 +281,62 @@ describe('observation mode', () => {
     expect(await sql(`SELECT 1 FROM app.admin_notifications WHERE category = 'ai_draft'`)).toHaveLength(1);
   });
 });
+
+describe('draft buttons', () => {
+  async function draftFor(text = 'bhai netflix er dam koto?') {
+    await setSetting('default_mode', 'COPILOT');
+    await setSetting('telegram_notifications', { enabled: true, max_per_minute: 20, categories: { ai_draft: 'immediate', new_conversation: 'disabled' } });
+    const { conversation } = await newConversation(text);
+    const job = (await one(`SELECT app.start_ai_job($1, 'reply', NULL, NULL) AS r`, [conversation.id])).r;
+    const s = (await one(`SELECT app.submit_ai_result($1, 'reply', 'Netflix 1 month is available.', NULL, '[]', '{}') AS r`, [job.job_id])).r;
+    return { conversation, draft: s.draft_id as string };
+  }
+  const press = (p: { userId: number; chatId: number }, data: string) =>
+    accept(upd({ kind: 'callback_query', user_id: p.userId, chat_id: p.chatId, callback_data: data, callback_id: 'cb' + seq, message_id: 5 }));
+  const decide = (updateId: number, admin: string, data: string) =>
+    asN8nRole(async (c) => (await c.query('SELECT app.telegram_draft_decision($1, $2, $3) AS r', [updateId, admin, data])).rows[0].r);
+
+  it('the draft notification carries Approve/Decline; Approve queues exactly that draft once', async () => {
+    const p = await pairOwner();
+    const { conversation, draft } = await draftFor();
+    const batch = await asN8nRole(async (c) => (await c.query('SELECT app.claim_admin_notifications(10) AS r')).rows[0].r);
+    const n = batch.find((b: any) => b.category === 'ai_draft');
+    expect(n.buttons[0].map((b: any) => b.data)).toEqual(['d:a:' + draft, 'd:r:' + draft]);
+
+    const a = await press(p, 'd:a:' + draft);
+    expect(a.route).toBe('callback');
+    const r = await decide(a.update_id, p.admin, a.data);
+    expect(r.ok).toBe(true);
+    expect(r.decision).toBe('approve');
+    const out = await sql(`SELECT body, actor_type, status FROM app.outbound_messages WHERE conversation_id = $1`, [conversation.id]);
+    expect(out).toEqual([{ body: 'Netflix 1 month is available.', actor_type: 'staff', status: 'queued' }]);
+    // A second press does not send twice.
+    const a2 = await press(p, 'd:a:' + draft);
+    expect((await decide(a2.update_id, p.admin, a2.data)).reason).toBe('draft_approved');
+    expect((await sql(`SELECT 1 FROM app.outbound_messages WHERE conversation_id = $1`, [conversation.id])).length).toBe(1);
+  });
+
+  it('Decline discards; a stale draft is not sent; strangers and spoofed calls cannot act', async () => {
+    const p = await pairOwner();
+    const one1 = await draftFor();
+    const d = await press(p, 'd:r:' + one1.draft);
+    expect(await decide(d.update_id, p.admin, d.data)).toMatchObject({ ok: true, decision: 'decline' });
+    expect((await one(`SELECT status FROM app.ai_drafts WHERE id = $1`, [one1.draft])).status).toBe('rejected');
+
+    const two = await draftFor('ar kichu?');
+    await sql(`UPDATE app.conversations SET revision = revision + 1 WHERE id = $1`, [two.conversation.id]);
+    const s = await press(p, 'd:a:' + two.draft);
+    expect((await decide(s.update_id, p.admin, s.data)).reason).toBe('stale_draft');
+    expect((await sql(`SELECT 1 FROM app.outbound_messages WHERE conversation_id = $1`, [two.conversation.id])).length).toBe(0);
+
+    // A stranger's button press is rejected before any decision.
+    const x = await accept(upd({ kind: 'callback_query', user_id: 999, chat_id: 999, callback_data: 'd:a:' + two.draft }));
+    expect(x.route).toBe('unauthorized');
+    expect((await decide(x.update_id, p.admin, 'd:a:' + two.draft)).reason).toBe('not_authorized');
+    // A normal text update cannot be replayed as a button press.
+    const t = await accept(upd({ user_id: p.userId, chat_id: p.chatId, text: '/status' }));
+    expect((await decide(t.update_id, p.admin, 'd:a:' + two.draft)).reason).toBe('not_authorized');
+    // The workflow role still cannot approve directly.
+    await expect(asN8nRole((c) => c.query(`SELECT app.approve_draft($1, $2, NULL, true)`, [two.draft, p.owner]))).rejects.toThrow(/permission denied/);
+  });
+});

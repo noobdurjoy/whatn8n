@@ -1,4 +1,4 @@
-// Infinity Digital Shop — WhatsApp AI Support · "Reply: note"
+// Infinity Digital Shop — WhatsApp AI Support · "Reply: draft"
 // Builds the Telegram answer for the owner. Telegram parses HTML, so every
 // value is escaped. No secrets, raw logs or customer data beyond what the
 // owner asked about.
@@ -15,7 +15,7 @@ function formatDhaka(iso) {
 }
 // ---- end shared/admin-commands.js ----
 
-const KIND = 'note';
+const KIND = 'draft';
 const up = $('Accept Update').first().json;
 const r = up.r || {};
 const dash = String(up.dash || '').replace(/\/+$/, '');

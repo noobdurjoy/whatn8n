@@ -69,7 +69,7 @@ BEGIN
       app.stock_change_begin(jsonb), app.stock_change_finish(uuid, text, jsonb, jsonb),
       app.admin_save_knowledge(uuid, text, text, text), app.admin_save_notice(jsonb), app.find_active_notices(text),
       app.admin_cancel_notice(uuid, uuid), app.admin_save_staff_note(uuid, text), app.active_notices_for(text),
-      app.admin_reply_whatsapp(uuid, text, text, uuid),
+      app.admin_reply_whatsapp(uuid, text, text, uuid), app.telegram_draft_decision(bigint, uuid, text),
       app.claim_admin_notifications(integer), app.finish_admin_notification(uuid, boolean, text), app.admin_daily_summary(),
       app.notify_admin(text, text, text, text, text, uuid), app.notices_expiring_soon(), app.expire_stuck_stock_changes(),
       app.dashboard_link(uuid), app.html_escape(text), app.redact_text(text)

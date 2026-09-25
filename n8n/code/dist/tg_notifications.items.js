@@ -6,7 +6,7 @@
 const KIND = 'items';
 if (KIND === 'items') {
   const list = ($input.first().json || {}).r || [];
-  return list.map((n) => ({ json: { notification_id: n.notification_id, chat_id: String(n.chat_id), text: String(n.text || '').slice(0, 4000) } }));
+  return list.map((n) => ({ json: { notification_id: n.notification_id, chat_id: String(n.chat_id), text: String(n.text || '').slice(0, 4000), buttons: Array.isArray(n.buttons) ? n.buttons : null } }));
 }
 const out = [];
 const rows = $input.all();

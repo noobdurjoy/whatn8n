@@ -97,6 +97,14 @@ if (KIND === 'pair') {
   const list = inp.choices || [];
   const lines = list.map((c, i) => (i + 1) + '. ' + esc(c.name || c.title || c.body || c.customer || '') + (c.sku ? ' — SKU ' + esc(c.sku) : '') + (c.product_id ? ' (#' + c.product_id + (c.variation_id ? '/' + c.variation_id : '') + ')' : '') + (c.account ? ' — account ' + esc(c.account) : '') + (c.expires_local ? ' — until ' + esc(c.expires_local) : ''));
   text = 'Several matches. Reply with the number (or "cancel"):\n' + lines.join('\n');
+} else if (KIND === 'draft') {
+  const d = $('Draft Decision').first().json.r || {};
+  const why = { stale_draft: 'The customer wrote again after this draft, so it was NOT sent. A newer draft will follow.',
+    draft_approved: 'Already approved.', draft_rejected: 'Already declined.', draft_invalidated: 'This draft is no longer valid (the chat changed or a person took over). Nothing was sent.',
+    draft_not_found: 'Draft not found.', not_allowed_for_role: 'Your role cannot approve drafts.', not_authorized: 'Not allowed.', unknown_button: 'Unknown button.' };
+  if (d.ok && d.decision === 'approve') text = '✅ Approved. Sending this reply to the customer now (the usual send checks still apply). You get a message here if it cannot be sent.';
+  else if (d.ok) text = '🗑 Declined. Nothing was sent to the customer.';
+  else text = '❌ ' + esc(why[d.reason] || String(d.reason || 'Not done.'));
 } else if (KIND === 'canceled') {
   text = 'Canceled.';
 }

@@ -17,5 +17,9 @@ return [{ json: { p: {
   chat_type: chat.type || null,
   // Edited messages are never executed again as commands.
   text: m && !u.edited_message && typeof m.text === 'string' ? m.text : '',
+  // Button presses: only the button's data and ids (the message text is not needed).
+  callback_data: cb && typeof cb.data === 'string' ? cb.data.slice(0, 64) : null,
+  callback_id: cb && cb.id ? String(cb.id) : null,
+  message_id: cb && cb.message && cb.message.message_id ? cb.message.message_id : null,
   forwarded: Boolean(m && (m.forward_origin || m.forward_from || m.forward_from_chat || m.forward_sender_name || m.forward_date)),
 } } }];

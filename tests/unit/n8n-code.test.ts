@@ -366,9 +366,14 @@ describe('Telegram admin nodes', () => {
   it('reduces an update to ids, text and the forwarded flag only', async () => {
     const [o] = await run('tg_input.js', { update_id: 9, message: { text: 'Set stock for SKU A to 1', chat: { id: 42, type: 'private' }, from: { id: 42, username: 'owner' },
       forward_origin: { type: 'user' } } });
-    expect(o.json.p).toEqual({ update_id: 9, kind: 'message', user_id: 42, chat_id: 42, chat_type: 'private', text: 'Set stock for SKU A to 1', forwarded: true });
+    expect(o.json.p).toEqual({ update_id: 9, kind: 'message', user_id: 42, chat_id: 42, chat_type: 'private', text: 'Set stock for SKU A to 1',
+      callback_data: null, callback_id: null, message_id: null, forwarded: true });
     const [e] = await run('tg_input.js', { update_id: 10, edited_message: { text: 'Set stock for SKU A to 9', chat: { id: 42, type: 'private' }, from: { id: 42 } } });
     expect(e.json.p.text).toBe('');   // edits never run again as commands
+    // A button press keeps only the button data and ids, never the message text.
+    const [b] = await run('tg_input.js', { update_id: 11, callback_query: { id: 'q1', data: 'd:a:x', from: { id: 42 },
+      message: { message_id: 7, text: 'AI draft …', chat: { id: 42, type: 'private' } } } });
+    expect(b.json.p).toMatchObject({ kind: 'callback_query', user_id: 42, chat_id: 42, text: '', callback_data: 'd:a:x', callback_id: 'q1', message_id: 7 });
   });
   it('routes explicit forms by rules and everything else to the model', async () => {
     const [a] = await run('tg_parse.js', up({ text: 'Set stock for SKU SPOTIFY-1M to 5' }));

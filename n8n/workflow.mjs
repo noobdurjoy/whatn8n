@@ -425,6 +425,15 @@ function sections() {
         '{ conversation_id: $json.conversation_id || null, reason: $json.reason || null }', { sample: { conversation_id: UUID, reason: 'automation_hold' } }),
       pg('Claim Admin Notifications', 'SELECT app.claim_admin_notifications(20) AS r', null),
       code('Notification Items', 'tg_notifications.items.js'),
+      ifNode('Has Buttons?', isTrue('={{ Array.isArray($json.buttons) && $json.buttons.length > 0 }}')),
+      // AI drafts: Approve / Decline buttons (handled in T1 as button presses).
+      { name: 'Send Draft Notification', type: 'n8n-nodes-base.telegram', version: 1.2,
+        parameters: { resource: 'message', operation: 'sendMessage', chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', replyMarkup: 'inlineKeyboard',
+          inlineKeyboard: { rows: [{ row: { buttons: [
+            { text: '={{ $json.buttons[0][0].text }}', additionalFields: { callback_data: '={{ $json.buttons[0][0].data }}' } },
+            { text: '={{ $json.buttons[0][1].text }}', additionalFields: { callback_data: '={{ $json.buttons[0][1].data }}' } }] } }] },
+          additionalFields: { appendAttribution: false, disable_web_page_preview: true, parse_mode: 'HTML' } },
+        credentials: cred('telegramAdmin'), onError: 'continueRegularOutput' },
       { name: 'Send Notification', type: 'n8n-nodes-base.telegram', version: 1.2,
         parameters: { resource: 'message', operation: 'sendMessage', chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', additionalFields: { appendAttribution: false, disable_web_page_preview: true, parse_mode: 'HTML' } },
         credentials: cred('telegramAdmin'), onError: 'continueRegularOutput' },
@@ -439,7 +448,8 @@ function sections() {
         credentials: cred('telegramAdmin'), onError: 'continueRegularOutput' },
     ],
     edges: [['Notify Request', 0, 'Queue Staff Alert'],
-      ['Claim Admin Notifications', 0, 'Notification Items'], ['Notification Items', 0, 'Send Notification'], ['Send Notification', 0, 'Notification Results'], ['Notification Results', 0, 'Finish Notification'],
+      ['Claim Admin Notifications', 0, 'Notification Items'], ['Notification Items', 0, 'Has Buttons?'], ['Has Buttons?', 0, 'Send Draft Notification'], ['Has Buttons?', 1, 'Send Notification'],
+      ['Send Draft Notification', 0, 'Notification Results'], ['Send Notification', 0, 'Notification Results'], ['Notification Results', 0, 'Finish Notification'],
       ['Daily Summary 21:00', 0, 'Build Daily Summary'], ['Build Daily Summary', 0, 'Summary Items'], ['Summary Items', 0, 'Send Daily Summary']],
   });
 
@@ -652,13 +662,13 @@ function sections() {
     title: 'T1 · Telegram admin: intake & authorization',
     note: 'The **IDS Telegram Admin** bot (a bot dedicated to this project). n8n verifies Telegram\'s secret-token header. **Accept Update** records every update_id once (repeats stop here) and authorizes by **numeric Telegram user id + private chat id** of a paired owner/admin — never by username, display name or first contact. Unauthorized users get one generic answer a day; their text is not stored and never reaches a model. Pairing: the dashboard owner creates a single-use code valid 10 minutes and sends `/pair CODE` here. Forwarded messages are never commands.',
     nodes: [
-      { name: 'Telegram Admin Trigger', type: 'n8n-nodes-base.telegramTrigger', version: 1.2, parameters: { updates: ['message'], additionalFields: {} },
+      { name: 'Telegram Admin Trigger', type: 'n8n-nodes-base.telegramTrigger', version: 1.2, parameters: { updates: ['message', 'callback_query'], additionalFields: {} },
         credentials: cred('telegramAdmin'), trigger: true, webhookId: stableId('ids-wa-telegram-admin') },
       code('Telegram Update Input', 'tg_input.js'),
       pg('Accept Update', `SELECT app.telegram_accept_update(p->'p') AS r, app.setting('models') AS models, rtrim(coalesce(app.setting('dashboard_url') #>> '{}', ''), '/') AS dash,
          rtrim(coalesce(app.setting('shop_base_url') #>> '{}', ''), '/') AS shop FROM ${jsonParam()}`, '$json',
         { sample: { p: { update_id: 1, user_id: 1, chat_id: 1, chat_type: 'private', text: '/status', kind: 'message' } } }),
-      routeSwitch('Telegram Route', ['pair', 'unauthorized', 'reply_only', 'command'], '$json.r.route'),
+      routeSwitch('Telegram Route', ['pair', 'unauthorized', 'reply_only', 'command', 'callback'], '$json.r.route'),
       pg('Pair Owner', `SELECT app.telegram_pair((p->>'update_id')::bigint, (p->>'user_id')::bigint, (p->>'chat_id')::bigint, p->>'code') AS r FROM ${jsonParam()}`, '$json.r',
         { sample: { update_id: 1, user_id: 1, chat_id: 1, code: 'ABCD2345' } }),
       code('Reply: pair', 'tg_reply.pair.js'),
@@ -668,6 +678,17 @@ function sections() {
       { name: 'Send Admin Reply', type: 'n8n-nodes-base.telegram', version: 1.2,
         parameters: { resource: 'message', operation: 'sendMessage', chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', additionalFields: { appendAttribution: false, disable_web_page_preview: true, parse_mode: 'HTML' } },
         credentials: cred('telegramAdmin'), onError: 'continueRegularOutput' },
+      // Approve / Decline under an AI draft: decided in the database for the
+      // verified admin of this button press; an approval is dispatched now.
+      pg('Draft Decision', `SELECT app.telegram_draft_decision((p->>'update_id')::bigint, (p->>'admin_id')::uuid, p->>'data') AS r FROM ${jsonParam()}`, '$json.r',
+        { sample: { update_id: 1, admin_id: UUID, data: 'd:a:' + UUID } }),
+      { name: 'Answer Button', type: 'n8n-nodes-base.telegram', version: 1.2,
+        parameters: { resource: 'callback', operation: 'answerQuery', queryId: '={{ ' + up + '.r.callback_id }}',
+          additionalFields: { text: "={{ $json.r.ok ? ($json.r.decision === 'approve' ? 'Sending to the customer…' : 'Declined') : 'Not done' }}" } },
+        credentials: cred('telegramAdmin'), onError: 'continueRegularOutput' },
+      code('Reply: draft', 'tg_reply.draft.js'),
+      ifNode('Draft Approved?', isTrue("={{ Boolean($json.r.ok && $json.r.decision === 'approve' && $json.r.outbound_id) }}")),
+      setRaw('Draft Outbound', '{ outbound_id: $json.r.outbound_id }'),
       pg('Record Reply', `SELECT app.telegram_update_outcome((p->>'update_id')::bigint, CASE WHEN (p->>'failed')::boolean THEN 'reply_failed' ELSE 'replied' END) AS ok FROM ${jsonParam()}`,
         "{ update_id: " + up + ".r.update_id, failed: Boolean($json.error) }", { sample: { update_id: 1, failed: false } }),
     ],
@@ -676,6 +697,8 @@ function sections() {
       ['Telegram Route', 1, 'Answer Stranger?'], ['Answer Stranger?', 0, 'Reply: unauthorized'], ['Reply: unauthorized', 0, 'Send Admin Reply'],
       ['Telegram Route', 2, 'Direct Reply Text'], ['Direct Reply Text', 0, 'Reply: direct'],
       ['Telegram Route', 3, 'Parse Command'],
+      ['Telegram Route', 4, 'Draft Decision'], ['Draft Decision', 0, 'Answer Button'], ['Answer Button', 0, 'Reply: draft'], ['Reply: draft', 0, 'Send Admin Reply'],
+      ['Draft Decision', 0, 'Draft Approved?'], ['Draft Approved?', 0, 'Draft Outbound'], ['Draft Outbound', 0, 'Dispatch Queue'],
       ['Send Admin Reply', 0, 'Record Reply']],
   });
 
