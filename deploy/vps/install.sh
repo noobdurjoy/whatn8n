@@ -109,16 +109,25 @@ done
 curl -fsS "http://127.0.0.1:${APP_PORT}/api/health" && echo
 
 say "nginx + HTTPS for ${DOMAIN}"
-SITE=/etc/nginx/sites-available/${DOMAIN}
+# Debian-style nginx uses sites-available/sites-enabled; nginx.org packages use conf.d.
+if [ -d /etc/nginx/sites-available ] && grep -q 'sites-enabled' /etc/nginx/nginx.conf; then
+  SITE=/etc/nginx/sites-available/${DOMAIN}; LINK=/etc/nginx/sites-enabled/${DOMAIN}
+else
+  SITE=/etc/nginx/conf.d/${DOMAIN}.conf; LINK=
+fi
+if grep -rqs "server_name[^;]*\b${DOMAIN}\b" /etc/nginx/ --include='*' && [ ! -f "$SITE" ]; then
+  echo "Another nginx file already serves ${DOMAIN}:"; grep -rls "server_name[^;]*\b${DOMAIN}\b" /etc/nginx/
+  echo "Not changing nginx. Remove or rename that server block, then run this script again."; exit 1
+fi
 if [ ! -f "$SITE" ]; then
   sed "s/__APP_PORT__/${APP_PORT}/" deploy/vps/nginx-support.conf > "$SITE"
-  ln -sf "$SITE" /etc/nginx/sites-enabled/${DOMAIN}
-  nginx -t
+  [ -n "$LINK" ] && ln -sf "$SITE" "$LINK"
+  if ! nginx -t; then rm -f "$SITE" ${LINK:+"$LINK"}; echo "nginx rejected the new site; removed it again."; exit 1; fi
   systemctl reload nginx
   command -v certbot >/dev/null || apt-get install -y certbot python3-certbot-nginx
   certbot --nginx -d "$DOMAIN" --redirect
 else
-  echo "nginx site already present (not changed)"
+  echo "nginx site already present: $SITE (not changed)"
 fi
 curl -fsS "https://${DOMAIN}/api/health" && echo
 
