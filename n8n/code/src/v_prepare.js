@@ -56,9 +56,10 @@ const request = {
     ] },
   ],
   response_format: { type: 'json_object' },
-  // Qwen reasons before answering; without a cap the reasoning can use the
-  // whole token budget and leave an empty object as the answer.
-  reasoning: { effort: 'low', exclude: true },
+  // Qwen reasons before answering and its provider ignores "effort": live
+  // checks got "{}" or no answer at all. A hard reasoning budget leaves room
+  // for the JSON answer (3 of 3 live checks passed with 256).
+  reasoning: { max_tokens: 256, exclude: true },
   max_tokens: models.vision_max_tokens || 1200,
   temperature: 0.1,
   provider: { require_parameters: true },

@@ -29,7 +29,7 @@ return [{ json: {
     ],
     response_format: { type: 'json_object' },
     // Same settings as customer images ("Prepare Vision Request").
-    reasoning: { effort: 'low', exclude: true },
+    reasoning: { max_tokens: 256, exclude: true },
     max_tokens: 1200,
   },
 } }];

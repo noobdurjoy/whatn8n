@@ -56,8 +56,8 @@ describe('B2 image analysis', () => {
     expect(content[1]).toEqual({ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } });
     expect(JSON.stringify(o.json.request)).not.toMatch(/zernio\.com/);
     expect(o.json.request.response_format).toEqual({ type: 'json_object' });
-    // Live check: without a reasoning cap Qwen spent the whole budget reasoning and answered "{}".
-    expect(o.json.request.reasoning).toEqual({ effort: 'low', exclude: true });
+    // Live checks: with only effort 'low', Qwen spent the whole budget reasoning and answered "{}".
+    expect(o.json.request.reasoning).toEqual({ max_tokens: 256, exclude: true });
     expect(o.json.request.max_tokens).toBe(1200);
   });
   it('does not start for a stale job (takeover during analysis)', async () => {
