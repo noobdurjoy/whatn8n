@@ -257,3 +257,27 @@ describe('admin notifications', () => {
     expect((await sql(`SELECT 1 FROM app.admin_notifications WHERE mode = 'summary' AND status = 'pending'`)).length).toBe(0);
   });
 });
+
+describe('observation mode', () => {
+  it('sends COPILOT reply drafts to Telegram with the customer message; staff-assist drafts are not sent', async () => {
+    await pairOwner();
+    await setSetting('default_mode', 'COPILOT');
+    await setSetting('telegram_notifications', { enabled: true, max_per_minute: 20, categories: { ai_draft: 'immediate', new_conversation: 'disabled' } });
+    const { conversation } = await newConversation('bhai netflix er dam koto?');
+    const job = (await one(`SELECT app.start_ai_job($1, 'reply', NULL, NULL) AS r`, [conversation.id])).r;
+    const s = (await one(`SELECT app.submit_ai_result($1, 'reply', 'Netflix 1 month is available.', NULL, '[]', '{}') AS r`, [job.job_id])).r;
+    expect(s.result).toBe('drafted');
+    const rows = await sql(`SELECT category, mode, title, detail FROM app.admin_notifications WHERE category = 'ai_draft'`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].mode).toBe('immediate');
+    expect(rows[0].title).toMatch(/NOT sent/);
+    expect(rows[0].detail).toContain('bhai netflix er dam koto?');
+    expect(rows[0].detail).toContain('Netflix 1 month is available.');
+    expect((await sql(`SELECT 1 FROM app.outbound_messages WHERE conversation_id = $1`, [conversation.id])).length).toBe(0);
+
+    const agent = await staff('agent');
+    const j2 = (await one(`SELECT app.start_ai_job($1, 'staff_assist', NULL, NULL, $2) AS r`, [conversation.id, agent])).r;
+    await one(`SELECT app.submit_ai_result($1, 'reply', 'assist text', NULL, '[]', '{}') AS r`, [j2.job_id]);
+    expect(await sql(`SELECT 1 FROM app.admin_notifications WHERE category = 'ai_draft'`)).toHaveLength(1);
+  });
+});

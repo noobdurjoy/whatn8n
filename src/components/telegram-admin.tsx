@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { containsBangla, fmtTime, useApi, useSession } from '@/components/session';
 
 const CATEGORY_LABELS: Record<string, string> = {
-  new_conversation: 'New conversations', customer_message: 'Customer messages', ai_reply: 'AI replies sent', staff_reply: 'Staff replies sent',
+  new_conversation: 'New conversations', customer_message: 'Customer messages', ai_reply: 'AI replies sent', ai_draft: 'AI draft replies (not sent)', staff_reply: 'Staff replies sent',
   delivery_failure: 'Delivery failures', handoff: 'Handoffs to a person', unresolved: 'Unresolved conversations', orders: 'Orders and payments',
   stock: 'Stock changes', knowledge: 'Knowledge changes', notice_expiring: 'Temporary notices about to expire', api_failure: 'API failures',
   connection: 'Connection problems', spending: 'AI spending limit', deployment: 'Deployment status', backup: 'Backups',

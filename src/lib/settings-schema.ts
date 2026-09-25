@@ -5,7 +5,7 @@ import { z } from 'zod';
 // WhatsApp policy and is read-only.
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const modelId = z.string().regex(/^[a-z0-9][\w.-]*\/[\w.:-]+$/i).max(120);
-export const NOTIFICATION_CATEGORIES = ['new_conversation', 'customer_message', 'ai_reply', 'staff_reply', 'delivery_failure', 'handoff', 'unresolved',
+export const NOTIFICATION_CATEGORIES = ['new_conversation', 'customer_message', 'ai_reply', 'ai_draft', 'staff_reply', 'delivery_failure', 'handoff', 'unresolved',
   'orders', 'stock', 'knowledge', 'notice_expiring', 'api_failure', 'connection', 'spending', 'deployment', 'backup', 'admin_reply_status'] as const;
 const text3 = z.object({ en: z.string().max(500), bn: z.string().max(500).optional(), banglish: z.string().max(500).optional() });
 
