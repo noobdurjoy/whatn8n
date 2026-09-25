@@ -56,6 +56,9 @@ const request = {
     ] },
   ],
   response_format: { type: 'json_object' },
+  // Qwen reasons before answering; without a cap the reasoning can use the
+  // whole token budget and leave an empty object as the answer.
+  reasoning: { effort: 'low', exclude: true },
   max_tokens: models.vision_max_tokens || 1200,
   temperature: 0.1,
   provider: { require_parameters: true },
