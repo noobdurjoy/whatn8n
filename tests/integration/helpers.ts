@@ -53,7 +53,9 @@ export async function resetData() {
     TRUNCATE app.audit_log, app.alerts, app.webhook_events, app.outbound_attempts, app.image_analyses, app.ai_usage,
              app.attachment_blobs, app.attachments, app.feedback, app.tickets, app.internal_notes,
              app.pending_order_operations, app.order_verifications, app.order_links, app.customer_memories,
-             app.conversation_summaries, app.mode_changes, app.knowledge_proposals, app.staff_sessions
+             app.conversation_summaries, app.mode_changes, app.knowledge_proposals, app.staff_sessions,
+             app.admin_notifications, app.stock_changes, app.temporary_notices, app.staff_notes, app.admin_commands,
+             app.telegram_updates, app.telegram_admins, app.telegram_pairing_codes
              CASCADE`);
   await db().query(`DELETE FROM app.outbound_messages`);
   await db().query(`DELETE FROM app.ai_drafts`);

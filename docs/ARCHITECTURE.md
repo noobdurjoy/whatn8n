@@ -12,10 +12,12 @@ flowchart LR
   WF -- restricted role wa_n8n<br/>granted functions only --> DB
   WF -- send / media / history --> Z
   WF -- DeepSeek chat + Qwen vision --> OR[OpenRouter]
-  WF -- Store API + REST read-only --> WOO
+  WF -- Store API + REST read (IDS WooCommerce Read) --> WOO
+  WF -- stock fields only (IDS WooCommerce Stock) --> WOO
   WF -- event sweep, history import --> BE
   STAFF[Staff browser] -- session cookie + CSRF --> BE
-  WF -. alerts .-> TG[Telegram, optional]
+  OWNER[Owner on Telegram] <-- private bot, secret-token webhook --> TGB[Telegram Bot API<br/>IDS Telegram Admin]
+  TGB <--> WF
   MON[Uptime monitor] -. /api/health/n8n .-> BE
 ```
 
@@ -41,7 +43,7 @@ flowchart LR
 - **n8n: exactly one workflow**, *Infinity Digital Shop — WhatsApp AI Support*.
   - It has no sub-workflows, no Execute Workflow or workflow-tool nodes, no separate error workflow, and no calls to its own webhooks.
   - It connects to PostgreSQL as `wa_n8n`, which may only execute the functions listed in `db/grants.sql`.
-  - It holds the provider credentials.
+  - It holds the provider credentials (all named `IDS …`, used by no other project).
 
 ## The workflow
 
@@ -56,14 +58,18 @@ The workflow is generated from `n8n/workflow.mjs`. Code nodes come from `n8n/cod
 | 5 | Image analysis (Qwen) | from 4 | The customer's stored attachment is sent as a base64 data URL with the question. Output is validated JSON observations; stale jobs are skipped; results are reused for the same image, model and prompt |
 | 6 | WooCommerce tools | from 4 | Store API search, details and variations; hosted-checkout links; order status **only for a verified owner**; staff-handled order requests |
 | 7 | Outgoing dispatch | webhook `wa-dispatch`, every 15 s, and from 1, 3, 9, 12 | **The only sending path.** A queue and a loop; `claim_outbound` re-checks every control right before each send; Idempotency-Key; unknown outcomes are recorded, never retried blindly |
-| 8 | Staff alerts | from 1, 3, 12 | Telegram notifications with facts and a dashboard link only (off by default) |
+| 8 | Notifications | database outbox, every 1 min; 21:00 daily summary | Business events (new chats, handoffs, delivery failures, orders, stock, knowledge, expiring notices, API/connection/spending/deployment/backup problems, status of Telegram replies) become rows in `app.admin_notifications`. Each category is immediate, summary or disabled; rows are deduplicated, rate-limited and sent only to paired admins; a failed Telegram send is retried at most 3 times and never repeats the action behind it |
 | 9 | WooCommerce sync | webhook `wa-woo-event`, every 6 h | Product and order references; optional order-status messages through 7 |
 | 10 | Memory & summaries | every 10 min, looped | Per-conversation summaries and customer-stated preferences, scoped to that customer |
 | 11 | Daily knowledge proposals | 03:15 Asia/Dhaka | Redacted review of resolved chats. Produces **pending** proposals only; an admin must approve them |
-| 12 | Recovery & maintenance | every 1 min / 5 min / daily | Heartbeat, lease expiry, backend event sweep, alert forwarding, interrupted-job recovery, overdue reminders, pending media, unknown-send reconciliation, retention |
+| 12 | Recovery & maintenance | every 1 min / 5 min / daily | Heartbeat, lease expiry, backend event sweep, interrupted-job recovery, overdue reminders, pending media, unknown-send reconciliation, expiring-notice warnings, stuck stock changes, retention |
 | 13 | History import | manual | Earlier Zernio history for known conversations, stored as historical messages (never answered) |
-| 14 | Error recording | Error Trigger (the workflow is its own error workflow) | A failure becomes a dashboard alert, which 12 forwards to staff |
+| 14 | Error recording | Error Trigger (the workflow is its own error workflow) | A failure becomes a dashboard alert and an `api_failure` notification |
 | 15 | Connection check | manual | Read-only live check of every credential and service |
+| T1 | Telegram admin: intake & authorization | Telegram Trigger (`IDS Telegram Admin`) | n8n checks Telegram's secret-token header. `telegram_accept_update` records each `update_id` once and authorizes by **numeric user id + private chat id** of a paired owner/admin, before anything else runs. Pairing with a single-use 10-minute code |
+| T2 | Telegram admin: command understanding | from T1 | Explicit forms by rules; other wording (English, Bangla, Banglish) to DeepSeek, which may only **propose** one structured action. *Check Proposed Action* validates it; `admin_command_start` records it once and checks the role for that action type |
+| T3 | Telegram admin: stock | from T2 | Exact product/variation (choices when ambiguous) → current values → plan (set / add-remove / availability, respecting *Manage stock*) → `stock_change_begin` (records previous, blocks overlap) → PUT of one stock field with `IDS WooCommerce Stock` → read-back → succeeded / failed / **unknown** |
+| T4 | Telegram admin: knowledge, notices, notes, WhatsApp replies | from T2 | Permanent knowledge, temporary notices (scope, start, expiry in Asia/Dhaka, version), private staff notes, and exact-text WhatsApp replies queued as human staff replies through section 7 |
 
 **How one workflow replaces the old sub-workflow calls.**
 - Where the old design called a sub-workflow once per item, a **Loop Over Items** node (batch size 1) walks the items through the shared branch, and every path returns to the loop. There are loops for tool calls (one per round), dispatch, summaries, reconciliation and history import.
@@ -103,7 +109,7 @@ The AI can only record a request with `propose_order_change`: refund, cancellati
 2. They make the change **in WooCommerce themselves**. Refunds go through the payment gateway there.
 3. They record the result: **I did it in WooCommerce** or **Not done**.
 
-Nothing in the workflow changes an order. The WooCommerce credential is read-only.
+Nothing in the workflow changes an order. The read credential is read-only; the separate stock credential is used by one node (*Write Stock*) whose URL is fixed to a product or variation and whose body can only hold `stock_quantity` or `stock_status`.
 
 Purchases use WooCommerce's hosted checkout link for the exact product and variation. Payment status comes only from WooCommerce, never from a customer's claim or a screenshot.
 
@@ -118,3 +124,22 @@ Purchases use WooCommerce's hosted checkout link for the exact product and varia
   - The dashboard shows **Automation offline** once the heartbeat is older than 3 minutes.
   - `GET /api/health/n8n` returns `503` for an external uptime monitor.
 - **Model usage missing** from a response: stored as *unavailable*, never as zero.
+
+## Telegram admin bot
+
+**Authority.** Telegram text is untrusted until `telegram_accept_update` has matched the numeric sender id and private chat id against an active pairing for an active owner/admin. Usernames, display names and "first contact" never authorize. Unauthorized text is not stored and never reaches a model. Forwarded messages, edits and customer content are never commands. The model only proposes an action. Deterministic code validates it, and the database checks the role (`admin_cap_for`) and the command state. Database changes made for a command run under a transaction-local marker (`app.admin_command`) that `require_cap` accepts only for that one verified command, so the workflow role cannot act as staff otherwise.
+
+**Stock.** Commands resolve to exactly one product or variation (a list of choices otherwise), read the live values, and never invent a quantity. For example, "set to N" or "add N" on an item without *Manage stock* is refused, and "out of stock" on a managed item sets the quantity to 0. Every change is recorded in `app.stock_changes` with its previous value, request, command id and owner. The record is unique per command and blocks overlapping changes to the same item. Success is reported only after a read-back matches. A timeout without a matching read-back is **unknown** and is never retried automatically.
+
+**Knowledge.** The bot sorts information into four kinds:
+
+| Kind | Where it goes | Who sees it |
+| --- | --- | --- |
+| Permanent customer knowledge | Published as a knowledge version. The owner's explicit command counts as the approval; customer chats still go through the reviewed daily learning. | Customers, through the AI |
+| Temporary notice | `app.temporary_notices`, with scope, start, expiry, owner and version | Customers, through the AI, until the notice expires or is canceled. Expired notices are filtered out at read time. |
+| Private staff note | `app.staff_notes` | Staff only; never customers or the AI |
+| Inventory change | Stock section (T3) | — |
+
+Notices add to approved policies but never override live prices, stock, payment status, security rules or permissions. The reply prompt says so, and prices and stock always come from WooCommerce tools.
+
+**WhatsApp replies.** `admin_reply_whatsapp` normalizes Bangladeshi numbers (`017…`, `+880…`, Bangla digits). It finds the customer on an enabled WhatsApp account and asks for a choice when there are several matches. It queues the **exact** text as a human staff reply (origin `telegram_admin`, idempotency key per command), which takes over the conversation. Section 7 then applies the emergency stop, the 24-hour window, template rules and rate limits. Queued, accepted, delivered, failed and unknown are reported to the admin separately. An unknown outcome is reconciled before any retry. There is no bulk sending.

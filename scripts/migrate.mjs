@@ -20,15 +20,23 @@ try {
     for (const r of (await client.query('SELECT version FROM app.schema_migrations')).rows) applied.add(r.version);
   }
   const files = (await readdir(dir)).filter((f) => f.endsWith('.sql')).sort();
+  const done = [];
   for (const f of files) {
     const version = f.replace(/\.sql$/, '');
     if (applied.has(version)) continue;
     process.stdout.write(`applying ${f} ... `);
     await client.query(await readFile(path.join(dir, f), 'utf8'));
+    done.push(version);
     console.log('ok');
   }
   await client.query(await readFile(path.join(dir, '..', 'grants.sql'), 'utf8'));
   console.log('migrations up to date; grants applied');
+  // Deployment status for the owner (Telegram category "Deployment status"),
+  // only when this deploy changed the database schema.
+  if (done.length && applied.size) {
+    await client.query(`SELECT app.notify_admin('deployment', $1, $2, $3)`,
+      ['deploy:' + done.join(','), 'Deployed: database updated', 'Applied ' + done.join(', ')]).catch(() => {});
+  }
 } finally {
   await client.end();
 }

@@ -40,6 +40,8 @@ return [{ json: {
   // A handoff queued the one fixed acknowledgement: dispatch it now (the
   // dispatcher still applies the emergency stop and every other check).
   dispatch: isMessage && humanRequested,
-  notify: (isMessage && humanRequested) || r.action === 'notify_staff',
+  // Handoff notifications come from the database (mode change trigger);
+  // this branch only queues explicit staff alerts.
+  notify: r.action === 'notify_staff',
   notify_input: { conversation_id: r.conversation_id, reason: r.action === 'notify_staff' ? r.reason : 'customer_requested_human', detail: r.detail || null },
 } }];

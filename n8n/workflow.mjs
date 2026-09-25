@@ -204,6 +204,7 @@ function sections() {
          'settings', (SELECT jsonb_object_agg(key, value) FROM app.settings WHERE key IN ('shop_name', 'models', 'vision', 'escalation_rules', 'business_hours')),
          'prompt', (SELECT pv.body FROM app.ai_jobs aj JOIN app.prompt_versions pv ON pv.id = aj.prompt_version_id WHERE aj.id = q.j),
          'budget', app.ai_budget_status(),
+         'notices', app.active_notices_for((SELECT m.body FROM app.ai_jobs aj JOIN app.messages m ON m.id = aj.trigger_message_id WHERE aj.id = q.j)),
          'job_status', (SELECT status FROM app.ai_jobs WHERE id = q.j)) AS d
        FROM (SELECT (p->>'job_id')::uuid AS j FROM ${jsonParam()}) q`, '{ job_id: $json.job_id }', { sample: { job_id: UUID } }),
       code('Prepare Turn', 'b_prepare_turn.js'),
@@ -234,7 +235,7 @@ function sections() {
        FROM ${jsonParam()}, jsonb_array_elements(coalesce(p->'usage', '[]')) u`, '{ job_id: $json.job_id, usage: $json.usage }', { sample: { job_id: UUID, usage: [] } }),
       pg('Fail Invalid Job', `SELECT app.fail_ai_job((p->>'job_id')::uuid, p->>'failure') AS ok FROM ${jsonParam()}`, '{ job_id: $json.job_id, failure: $json.failure }', { sample: { job_id: UUID, failure: 'x' } }),
       code('After Submit', 'b_after_submit.js'),
-      routeSwitch('Follow Up', ['dispatch', 'notify'], '$json.kind'),
+      routeSwitch('Follow Up', ['dispatch'], '$json.kind'),
     ],
     edges: [
       ['Reply Request', 0, 'Load Debounce'], ['Load Debounce', 0, 'Burst Wait'], ['Burst Wait', 0, 'Start Job'], ['Start Job', 0, 'Resolve Job'],
@@ -250,7 +251,7 @@ function sections() {
       ['Validate & Decide', 0, 'Decision'],
       ['Decision', 0, 'Build Repair Request'], ['Build Repair Request', 0, 'R4 Call Model'], ['R4 Call Model', 0, 'R4 Parse Response'], ['R4 Parse Response', 0, 'Validate & Decide'],
       ['Decision', 1, 'Submit Result'], ['Decision', 1, 'Record Usage'], ['Decision', 2, 'Fail Invalid Job'], ['Decision', 2, 'Record Usage'],
-      ['Submit Result', 0, 'After Submit'], ['After Submit', 0, 'Follow Up'], ['Follow Up', 0, 'Dispatch Queue'], ['Follow Up', 1, 'Notify Request'],
+      ['Submit Result', 0, 'After Submit'], ['After Submit', 0, 'Follow Up'], ['Follow Up', 0, 'Dispatch Queue'],
     ],
   });
 
@@ -336,7 +337,7 @@ function sections() {
       http('Get Checkout Variations', { url: store(''), query: [['parent', '={{ ' + args + '.product_id }}'], ['type', 'variation'], ['per_page', '50']], full: true, timeout: 15000 }),
       code('Format checkout', 'e_format_products.checkout.js'),
       { name: 'Get Order', type: 'n8n-nodes-base.wooCommerce', version: 1, parameters: { resource: 'order', operation: 'get', orderId: '={{ ' + args + '.order_id }}' },
-        credentials: cred('woo'), onError: 'continueRegularOutput', alwaysOutputData: true },
+        credentials: cred('wooRead'), onError: 'continueRegularOutput', alwaysOutputData: true },
       pg('Link Order', `SELECT CASE WHEN (p->>'allowed')::boolean THEN jsonb_build_object('linked', true, 'already', true)
               WHEN p->>'phone' IS NULL OR p->>'phone' = '' THEN jsonb_build_object('linked', false)
               ELSE app.link_order_if_phone_matches((p->>'job_id')::uuid, (p->>'order_id')::bigint, p->>'phone') END AS link
@@ -415,19 +416,31 @@ function sections() {
   // 8 -------------------------------------------------------------------------
   S.push({
     key: 'notify', color: 3,
-    title: '8 · Staff alerts (Telegram)',
-    note: 'Handoffs, customer requests for a person, failed/unknown sends, holds, overdue replies and workflow errors. Facts and a dashboard link only — never message content, attachments or contact details. Off until notifications.telegram_enabled is set.',
+    title: '8 · Staff notifications (outbox → Telegram admin bot)',
+    note: 'Business events become rows in the notification outbox (database triggers on messages, sends, handoffs, alerts, orders, stock, knowledge; plus this branch for routed staff alerts). Each category is **immediate**, **summary** or **disabled** (dashboard → Settings → Telegram notifications). Every minute the due rows are claimed (deduplicated, rate-limited) and sent with the **IDS Telegram Admin** bot to paired admins only; the daily summary goes at 21:00 Dhaka. A failed Telegram send is retried at most 3 times and never repeats the customer action behind it. Facts and dashboard links only — no raw logs or secrets.',
     nodes: [
       noop('Notify Request'),
-      pg('Load Facts', `SELECT (SELECT app.notification_facts((p->>'conversation_id')::uuid) WHERE p->>'conversation_id' ~* '^[0-9a-f-]{36}$') AS f,
-       app.setting('notifications') AS notify, app.setting('dashboard_url') #>> '{}' AS dash FROM ${jsonParam()}`,
-        "{ conversation_id: $json.conversation_id || ($json.alert && $json.alert.details && $json.alert.details.conversation_id) || null }", { sample: { conversation_id: UUID } }),
-      code('Format Notification', 'd_format.js'),
-      { name: 'Send Telegram', type: 'n8n-nodes-base.telegram', version: 1.2,
+      pg('Queue Staff Alert', `SELECT app.notify_admin('handoff', 'route:' || coalesce(p->>'conversation_id', '') || ':' || coalesce(p->>'reason', '') || ':' || to_char(now(), 'YYYYMMDDHH24MI'),
+         'Conversation needs a person (' || replace(coalesce(p->>'reason', 'notice'), '_', ' ') || ')', NULL, app.dashboard_link(nullif(p->>'conversation_id', '')::uuid)) AS queued FROM ${jsonParam()}`,
+        '{ conversation_id: $json.conversation_id || null, reason: $json.reason || null }', { sample: { conversation_id: UUID, reason: 'automation_hold' } }),
+      pg('Claim Admin Notifications', 'SELECT app.claim_admin_notifications(20) AS r', null),
+      code('Notification Items', 'tg_notifications.items.js'),
+      { name: 'Send Notification', type: 'n8n-nodes-base.telegram', version: 1.2,
         parameters: { resource: 'message', operation: 'sendMessage', chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', additionalFields: { appendAttribution: false, disable_web_page_preview: true, parse_mode: 'HTML' } },
-        credentials: cred('telegram'), onError: 'continueRegularOutput' },
+        credentials: cred('telegramAdmin'), onError: 'continueRegularOutput' },
+      code('Notification Results', 'tg_notifications.results.js'),
+      pg('Finish Notification', `SELECT app.finish_admin_notification((p->>'id')::uuid, (p->>'ok')::boolean, p->>'error') AS ok FROM ${jsonParam()}`, '$json',
+        { sample: { id: UUID, ok: true, error: null } }),
+      schedule('Daily Summary 21:00', { field: 'days', daysInterval: 1, triggerAtHour: 21, triggerAtMinute: 0 }),
+      pg('Build Daily Summary', 'SELECT app.admin_daily_summary() AS r', null),
+      code('Summary Items', 'tg_notifications.items.js'),
+      { name: 'Send Daily Summary', type: 'n8n-nodes-base.telegram', version: 1.2,
+        parameters: { resource: 'message', operation: 'sendMessage', chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', additionalFields: { appendAttribution: false, disable_web_page_preview: true, parse_mode: 'HTML' } },
+        credentials: cred('telegramAdmin'), onError: 'continueRegularOutput' },
     ],
-    edges: [['Notify Request', 0, 'Load Facts'], ['Load Facts', 0, 'Format Notification'], ['Format Notification', 0, 'Send Telegram']],
+    edges: [['Notify Request', 0, 'Queue Staff Alert'],
+      ['Claim Admin Notifications', 0, 'Notification Items'], ['Notification Items', 0, 'Send Notification'], ['Send Notification', 0, 'Notification Results'], ['Notification Results', 0, 'Finish Notification'],
+      ['Daily Summary 21:00', 0, 'Build Daily Summary'], ['Build Daily Summary', 0, 'Summary Items'], ['Summary Items', 0, 'Send Daily Summary']],
   });
 
   // 9 -------------------------------------------------------------------------
@@ -521,17 +534,14 @@ function sections() {
   S.push({
     key: 'maintenance', color: 7,
     title: '12 · Scheduled recovery, reconciliation, reminders & cleanup',
-    note: 'Every minute: health heartbeat, expired send leases, **backend event sweep** (retries stored-but-unfinished webhook events, max 10 attempts, then dead-letter + alert), alert forwarding. Every 5 minutes: **interrupted AI jobs** handed to staff, overdue-reply reminders, pending media, **unknown sends reconciled** against Zernio\'s message list (marked sent only on one exact match; otherwise evidence for a person — never re-sent automatically). Daily: retention.',
+    note: 'Every minute: health heartbeat, expired send leases, **backend event sweep** (retries stored-but-unfinished webhook events, max 10 attempts, then dead-letter + alert), notification sending (section 8). Every 5 minutes: notices about to expire, interrupted stock changes (→ unknown), **interrupted AI jobs** handed to staff, overdue-reply reminders, pending media, **unknown sends reconciled** against Zernio\'s message list (marked sent only on one exact match; otherwise evidence for a person — never re-sent automatically). Daily: retention.',
     nodes: [
       schedule('Every Minute', { field: 'minutes', minutesInterval: 1 }),
       pg('Expire Leases', "SELECT app.expire_send_leases() AS expired, app.record_health('n8n_maintenance', 'ok', jsonb_build_object('at', now())) IS NULL AS health", null),
-      pg('Claim Alerts', `UPDATE app.alerts SET notified_at = now() WHERE id IN (
-         SELECT id FROM app.alerts WHERE resolved_at IS NULL AND notified_at IS NULL ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED)
-       RETURNING id, kind, severity, message, details`, null, { executeOnce: true }),
-      setRaw('Alert Input', '{ alert: $json, reason: $json.kind }'),
       pg('Sweep URL', "SELECT app.setting('dashboard_url') #>> '{}' AS url", null),
       http('Sweep Events', { method: 'POST', url: '={{ $json.url }}/api/internal/events/sweep', auth: 'backend', json: '={}', timeout: 20000 }),
       schedule('Every 5 Minutes', { field: 'minutes', minutesInterval: 5 }),
+      pg('Notice And Stock Housekeeping', 'SELECT app.notices_expiring_soon() AS expiring, app.expire_stuck_stock_changes() AS stuck_stock', null),
       pg('Recover Interrupted Jobs', "SELECT app.recover_stale_ai_jobs(interval '10 minutes') AS r", null),
       setRaw('Recovery Acknowledgements', '{ ack_outbound_ids: ($json.r && $json.r.ack_outbound_ids) || [] }'),
       pg('Overdue Reminders', `SELECT count(app.raise_alert('response_overdue', 'info', 'A customer is waiting past the response target.',
@@ -554,7 +564,7 @@ function sections() {
       schedule('Daily 04:10', { field: 'days', daysInterval: 1, triggerAtHour: 4, triggerAtMinute: 10 }),
       pg('Apply Retention', 'SELECT app.apply_retention() AS r', null),
     ],
-    edges: [['Every Minute', 0, 'Expire Leases'], ['Expire Leases', 0, 'Claim Alerts'], ['Claim Alerts', 0, 'Alert Input'], ['Alert Input', 0, 'Notify Request'],
+    edges: [['Every Minute', 0, 'Expire Leases'], ['Expire Leases', 0, 'Claim Admin Notifications'], ['Every 5 Minutes', 0, 'Notice And Stock Housekeeping'],
       ['Every Minute', 0, 'Sweep URL'], ['Sweep URL', 0, 'Sweep Events'],
       ['Every 5 Minutes', 0, 'Recover Interrupted Jobs'], ['Recover Interrupted Jobs', 0, 'Recovery Acknowledgements'], ['Recovery Acknowledgements', 0, 'Dispatch Queue'],
       ['Every 5 Minutes', 0, 'Overdue Reminders'], ['Every 5 Minutes', 0, 'Pending Media'], ['Pending Media', 0, 'Media Request'],
@@ -625,7 +635,7 @@ function sections() {
       http('Check Backend Health', { url: "={{ ($('Check Postgres').first().json.dashboard_url || 'https://invalid.localhost') + '/api/health' }}", full: true, timeout: 15000 }),
       http('Check Backend Token', { url: "={{ ($('Check Postgres').first().json.dashboard_url || 'https://invalid.localhost') + '/api/internal/ping' }}", auth: 'backend', full: true, timeout: 15000 }),
       { name: 'Check WooCommerce REST', type: 'n8n-nodes-base.wooCommerce', version: 1, parameters: { resource: 'product', operation: 'getAll', returnAll: false, limit: 1, options: {} },
-        credentials: cred('woo'), onError: 'continueRegularOutput', alwaysOutputData: true, executeOnce: true },
+        credentials: cred('wooRead'), onError: 'continueRegularOutput', alwaysOutputData: true, executeOnce: true },
       code('Connection Check Result', 'cc_summary.js'),
     ],
     edges: [['Run Connection Check', 0, 'Connection Check Plan'], ['Connection Check Plan', 0, 'Check Store API'], ['Check Store API', 0, 'Check Chat Model'],
@@ -634,6 +644,207 @@ function sections() {
       ['Check Backend Health', 0, 'Check Backend Token'], ['Check Backend Token', 0, 'Check WooCommerce REST'], ['Check WooCommerce REST', 0, 'Connection Check Result']],
   });
 
+  // T1 ------------------------------------------------------------------------
+  const up = "$('Accept Update').first().json";
+  const cmd = "$('Command').first().json";
+  S.push({
+    key: 'tg_intake', color: 6,
+    title: 'T1 · Telegram admin: intake & authorization',
+    note: 'The **IDS Telegram Admin** bot (a bot dedicated to this project). n8n verifies Telegram\'s secret-token header. **Accept Update** records every update_id once (repeats stop here) and authorizes by **numeric Telegram user id + private chat id** of a paired owner/admin — never by username, display name or first contact. Unauthorized users get one generic answer a day; their text is not stored and never reaches a model. Pairing: the dashboard owner creates a single-use code valid 10 minutes and sends `/pair CODE` here. Forwarded messages are never commands.',
+    nodes: [
+      { name: 'Telegram Admin Trigger', type: 'n8n-nodes-base.telegramTrigger', version: 1.2, parameters: { updates: ['message'], additionalFields: {} },
+        credentials: cred('telegramAdmin'), trigger: true, webhookId: stableId('ids-wa-telegram-admin') },
+      code('Telegram Update Input', 'tg_input.js'),
+      pg('Accept Update', `SELECT app.telegram_accept_update(p->'p') AS r, app.setting('models') AS models, rtrim(coalesce(app.setting('dashboard_url') #>> '{}', ''), '/') AS dash,
+         rtrim(coalesce(app.setting('shop_base_url') #>> '{}', ''), '/') AS shop FROM ${jsonParam()}`, '$json',
+        { sample: { p: { update_id: 1, user_id: 1, chat_id: 1, chat_type: 'private', text: '/status', kind: 'message' } } }),
+      routeSwitch('Telegram Route', ['pair', 'unauthorized', 'reply_only', 'command'], '$json.r.route'),
+      pg('Pair Owner', `SELECT app.telegram_pair((p->>'update_id')::bigint, (p->>'user_id')::bigint, (p->>'chat_id')::bigint, p->>'code') AS r FROM ${jsonParam()}`, '$json.r',
+        { sample: { update_id: 1, user_id: 1, chat_id: 1, code: 'ABCD2345' } }),
+      code('Reply: pair', 'tg_reply.pair.js'),
+      ifNode('Answer Stranger?', isTrue('={{ $json.r.answer }}')),
+      code('Reply: unauthorized', 'tg_reply.unauthorized.js'),
+      setRaw('Direct Reply Text', "{ reply: " + up + ".r.text }"),
+      { name: 'Send Admin Reply', type: 'n8n-nodes-base.telegram', version: 1.2,
+        parameters: { resource: 'message', operation: 'sendMessage', chatId: '={{ $json.chat_id }}', text: '={{ $json.text }}', additionalFields: { appendAttribution: false, disable_web_page_preview: true, parse_mode: 'HTML' } },
+        credentials: cred('telegramAdmin'), onError: 'continueRegularOutput' },
+      pg('Record Reply', `SELECT app.telegram_update_outcome((p->>'update_id')::bigint, CASE WHEN (p->>'failed')::boolean THEN 'reply_failed' ELSE 'replied' END) AS ok FROM ${jsonParam()}`,
+        "{ update_id: " + up + ".r.update_id, failed: Boolean($json.error) }", { sample: { update_id: 1, failed: false } }),
+    ],
+    edges: [['Telegram Admin Trigger', 0, 'Telegram Update Input'], ['Telegram Update Input', 0, 'Accept Update'], ['Accept Update', 0, 'Telegram Route'],
+      ['Telegram Route', 0, 'Pair Owner'], ['Pair Owner', 0, 'Reply: pair'], ['Reply: pair', 0, 'Send Admin Reply'],
+      ['Telegram Route', 1, 'Answer Stranger?'], ['Answer Stranger?', 0, 'Reply: unauthorized'], ['Reply: unauthorized', 0, 'Send Admin Reply'],
+      ['Telegram Route', 2, 'Direct Reply Text'], ['Direct Reply Text', 0, 'Reply: direct'],
+      ['Telegram Route', 3, 'Parse Command'],
+      ['Send Admin Reply', 0, 'Record Reply']],
+  });
+
+  // T2 ------------------------------------------------------------------------
+  S.push({
+    key: 'tg_commands', color: 6,
+    title: 'T2 · Telegram admin: command understanding',
+    note: 'Explicit forms (/help, /status, /notices, "Reply to 017…: text", "Set stock for SKU … to N", "Add N units to product …", "… is out of stock", "Remember: …", "Note: …") are parsed by **rules**. Other wording (English, Bangla, Banglish) goes to the configured **DeepSeek** model, which only proposes ONE structured action. **Check Proposed Action** validates it deterministically (types, integers, exact reply text, expiry in the future), then **Start Command** records it once per update and checks the admin\'s role for that action type in the database.',
+    nodes: [
+      code('Parse Command', 'tg_parse.js'),
+      routeSwitch('Parse Route', ['start', 'model', 'reply'], '$json.route'),
+      code('Build Command Request', 'tg_model_request.js'),
+      model('Interpret Command', '$json.request', 60000),
+      code('Check Proposed Action', 'tg_model_check.js'),
+      routeSwitch('Proposal Route', ['start', 'reply'], '$json.route'),
+      pg('Record Command Usage', `SELECT app.record_ai_usage(NULL, 'admin_command', p->'usage') AS id FROM ${jsonParam()}`, '{ usage: $json.usage }', { sample: { usage: {} } }),
+      code('Reply: direct', 'tg_reply.direct.js'),
+      pg('Start Command', `SELECT (app.admin_command_start((p->>'update_id')::bigint, (p->>'admin_id')::uuid, p->>'text', p->'action', p->>'parsed_by', nullif(p->>'parent_id', '')::uuid)
+         || jsonb_build_object('action', p->'action')) AS s FROM ${jsonParam()}`,
+        '{ update_id: $json.update_id, admin_id: $json.admin_id, text: $json.text, action: $json.action, parsed_by: $json.parsed_by, parent_id: $json.parent_id }',
+        { sample: { update_id: 1, admin_id: UUID, text: '/status', action: { type: 'status' }, parsed_by: 'rules', parent_id: null } }),
+      setRaw('Command', '$json.s'),
+      ifNode('Command Started?', isTrue('={{ $json.ok }}')),
+      code('Reply: refused', 'tg_reply.refused.js'),
+      routeSwitch('Action Route', ['info', 'stock', 'knowledge_permanent', 'notice_temporary', 'notice_cancel', 'staff_note', 'reply_whatsapp', 'cancel'], "({ help: 'info', status: 'info', notice_list: 'info', stock_set: 'stock', stock_adjust: 'stock', stock_status: 'stock' })[$json.action.type] || $json.action.type"),
+      pg('Load Admin Info', `SELECT jsonb_build_object('ai_enabled', app.setting_bool('ai_enabled', false), 'sending_enabled', app.setting_bool('sending_enabled', true),
+         'open', (SELECT count(*) FROM app.conversations WHERE status IN ('open', 'pending') AND NOT is_sandbox),
+         'waiting', (SELECT count(*) FROM app.conversations WHERE queue_state = 'waiting_staff' AND status IN ('open', 'pending')),
+         'unknown_sends', (SELECT count(*) FROM app.outbound_messages WHERE status = 'unknown'),
+         'dead_events', (SELECT count(*) FROM app.webhook_events WHERE processing_status = 'dead'),
+         'automation_ok', coalesce((SELECT checked_at > now() - interval '3 minutes' FROM app.health_checks WHERE component = 'n8n_maintenance'), false),
+         'notices_active', (SELECT count(*) FROM app.temporary_notices WHERE status = 'active' AND now() >= starts_at AND now() < expires_at),
+         'notices', app.find_active_notices('')) AS d`, null),
+      code('Reply: info', 'tg_reply.info.js'),
+      pg('Cancel Pending', `SELECT app.admin_command_finish((p->>'command_id')::uuid, 'canceled', '{}'::jsonb, NULL) AS ok FROM ${jsonParam()}`, '{ command_id: $json.command_id }', { sample: { command_id: UUID } }),
+      code('Reply: canceled', 'tg_reply.canceled.js'),
+    ],
+    edges: [['Parse Command', 0, 'Parse Route'], ['Parse Route', 0, 'Start Command'], ['Parse Route', 1, 'Build Command Request'], ['Parse Route', 2, 'Reply: direct'],
+      ['Build Command Request', 0, 'Interpret Command'], ['Interpret Command', 0, 'Check Proposed Action'], ['Check Proposed Action', 0, 'Proposal Route'], ['Check Proposed Action', 0, 'Record Command Usage'],
+      ['Proposal Route', 0, 'Start Command'], ['Proposal Route', 1, 'Reply: direct'],
+      ['Start Command', 0, 'Command'], ['Command', 0, 'Command Started?'], ['Command Started?', 0, 'Action Route'], ['Command Started?', 1, 'Reply: refused'],
+      ['Action Route', 0, 'Load Admin Info'], ['Load Admin Info', 0, 'Reply: info'],
+      ['Action Route', 7, 'Cancel Pending'], ['Cancel Pending', 0, 'Reply: canceled'],
+      ['Reply: direct', 0, 'Send Admin Reply'], ['Reply: refused', 0, 'Send Admin Reply'], ['Reply: info', 0, 'Send Admin Reply'], ['Reply: canceled', 0, 'Send Admin Reply']],
+  });
+
+  // T3 ------------------------------------------------------------------------
+  const wooRest = (p) => "={{ " + up + ".shop + '/wp-json/wc/v3/products" + p + " }}";
+  const restGet = (name, url, query) => ({ ...http(name, { url, query, full: true, timeout: 20000 }),
+    parameters: { ...http(name, { url, query, full: true, timeout: 20000 }).parameters, authentication: 'predefinedCredentialType', nodeCredentialType: 'wooCommerceApi' },
+    credentials: cred('wooRead') });
+  const exact = "' + (Number($json.target.variation_id) ? '/' + Number($json.target.product_id) + '/variations/' + Number($json.target.variation_id) : '/' + Number($json.target.product_id)) + '";
+  S.push({
+    key: 'tg_stock', color: 2,
+    title: 'T3 · Telegram admin: WooCommerce stock changes',
+    note: 'Resolves the **exact** product/variation (SKU, id, or name; several matches → numbered choices, never a guess). Reads the current values, plans set / add-remove / availability respecting "Manage stock" (never inventing a quantity), records previous + requested + command id + owner, and blocks overlapping changes for the same item. The write uses the separate **IDS WooCommerce Stock** credential on a fixed URL `/wp-json/wc/v3/products/{id}[/variations/{id}]` with a body that can only contain stock fields — no order or payment endpoint is reachable from here. Success is reported only after a **read-back** from WooCommerce matches; a timeout with no match is **unknown** (never retried automatically).',
+    nodes: [
+      code('Stock Lookup Plan', 'tg_stock_lookup.js'),
+      routeSwitch('Lookup Route', ['target', 'id', 'sku', 'search', 'reply'], '$json.mode'),
+      restGet('Find Product By Id', wooRest("/' + Number($json.product_id) + '"), null),
+      restGet('Find Product By SKU', wooRest(''), [['sku', '={{ $json.sku }}'], ['per_page', '10']]),
+      restGet('Find Products By Name', wooRest(''), [['search', '={{ $json.query }}'], ['per_page', '10'], ['status', 'publish']]),
+      code('Resolve Stock Target (products)', 'tg_stock_resolve.products.js'),
+      routeSwitch('Product Match', ['target', 'need_variations', 'choices', 'reply'], '$json.status'),
+      restGet('Load Variations', wooRest("/' + Number($json.product.id) + '/variations"), [['per_page', '100']]),
+      code('Resolve Stock Target (variations)', 'tg_stock_resolve.variations.js'),
+      routeSwitch('Variation Match', ['target', 'choices', 'reply'], '$json.status'),
+      noop('Stock Target'),
+      restGet('Read Current Stock', wooRest(exact), null),
+      code('Plan Stock Write', 'tg_stock_plan.js'),
+      routeSwitch('Stock Plan Route', ['write', 'reply'], '$json.route'),
+      pg('Begin Stock Change', `SELECT app.stock_change_begin(p) AS r FROM ${jsonParam()}`, '$json.begin',
+        { sample: { command_id: UUID, product_id: 1, variation_id: 0, sku: 'A', name: 'x', op: 'set', requested: { quantity: 1 }, previous: {} } }),
+      ifNode('Change Allowed?', isTrue('={{ $json.r.ok }}')),
+      (() => {
+        const url = "={{ " + up + ".shop + '/wp-json/wc/v3/products/' + Number($('Plan Stock Write').first().json.product_id) + (Number($('Plan Stock Write').first().json.variation_id) ? '/variations/' + Number($('Plan Stock Write').first().json.variation_id) : '') }}";
+        // Only the two stock fields can ever be sent from this node, and only
+        // the one that was planned (WooCommerce rejects null for either).
+        const W = "$('Plan Stock Write').first().json.write";
+        const body = "={{ JSON.stringify(Object.assign({}, typeof " + W + ".stock_quantity === 'number' ? { stock_quantity: " + W + ".stock_quantity } : {}, "
+          + "['instock', 'outofstock', 'onbackorder'].includes(" + W + ".stock_status) ? { stock_status: " + W + ".stock_status } : {})) }}";
+        const n = http('Write Stock', { method: 'PUT', url, json: body, full: true, timeout: 20000 });
+        n.parameters.authentication = 'predefinedCredentialType';
+        n.parameters.nodeCredentialType = 'wooCommerceApi';
+        n.credentials = cred('wooStock');
+        return n;
+      })(),
+      restGet('Read Back Stock', "={{ " + up + ".shop + '/wp-json/wc/v3/products/' + Number($('Plan Stock Write').first().json.product_id) + (Number($('Plan Stock Write').first().json.variation_id) ? '/variations/' + Number($('Plan Stock Write').first().json.variation_id) : '') }}", null),
+      code('Verify Stock', 'tg_stock_verify.js'),
+      pg('Finish Stock Change', `SELECT app.stock_change_finish((p->>'stock_change_id')::uuid, p->>'status', p->'target', p->'result') AS r FROM ${jsonParam()}`, '$json',
+        { sample: { stock_change_id: UUID, status: 'succeeded', target: {}, result: {} } }),
+      setRaw('Stock Result', "$('Verify Stock').first().json"),
+      setRaw('Stock Refused', "{ begin_refused: $json.r.reason }"),
+      pg('Save Stock Choices', `SELECT app.admin_command_finish((p->>'command_id')::uuid, 'awaiting_choice', '{}'::jsonb, p->'choices') AS ok, p->'choices' AS choices FROM ${jsonParam()}`,
+        "{ command_id: " + cmd + ".command_id, choices: $json.choices }", { sample: { command_id: UUID, choices: [] } }),
+      pg('Close Stock Command', `SELECT app.admin_command_finish((p->>'command_id')::uuid, 'clarify', jsonb_build_object('reply', p->>'reply'), NULL) AS ok FROM ${jsonParam()}`,
+        "{ command_id: " + cmd + ".command_id, reply: $json.reply }", { sample: { command_id: UUID, reply: 'x' } }),
+      setRaw('Stock Message', '{ reply: $json.reply }'),
+      code('Reply: stock', 'tg_reply.stock.js'),
+      code('Reply: choices', 'tg_reply.choices.js'),
+    ],
+    edges: [['Action Route', 1, 'Stock Lookup Plan'], ['Stock Lookup Plan', 0, 'Lookup Route'],
+      ['Lookup Route', 0, 'Stock Target'], ['Lookup Route', 1, 'Find Product By Id'], ['Lookup Route', 2, 'Find Product By SKU'], ['Lookup Route', 3, 'Find Products By Name'], ['Lookup Route', 4, 'Stock Message'],
+      ['Find Product By Id', 0, 'Resolve Stock Target (products)'], ['Find Product By SKU', 0, 'Resolve Stock Target (products)'], ['Find Products By Name', 0, 'Resolve Stock Target (products)'],
+      ['Resolve Stock Target (products)', 0, 'Product Match'],
+      ['Product Match', 0, 'Stock Target'], ['Product Match', 1, 'Load Variations'], ['Product Match', 2, 'Save Stock Choices'], ['Product Match', 3, 'Stock Message'],
+      ['Load Variations', 0, 'Resolve Stock Target (variations)'], ['Resolve Stock Target (variations)', 0, 'Variation Match'],
+      ['Variation Match', 0, 'Stock Target'], ['Variation Match', 1, 'Save Stock Choices'], ['Variation Match', 2, 'Stock Message'],
+      ['Stock Target', 0, 'Read Current Stock'], ['Read Current Stock', 0, 'Plan Stock Write'], ['Plan Stock Write', 0, 'Stock Plan Route'],
+      ['Stock Plan Route', 0, 'Begin Stock Change'], ['Stock Plan Route', 1, 'Close Stock Command'], ['Close Stock Command', 0, 'Stock Message'],
+      ['Begin Stock Change', 0, 'Change Allowed?'], ['Change Allowed?', 0, 'Write Stock'], ['Change Allowed?', 1, 'Stock Refused'],
+      ['Write Stock', 0, 'Read Back Stock'], ['Read Back Stock', 0, 'Verify Stock'], ['Verify Stock', 0, 'Finish Stock Change'], ['Finish Stock Change', 0, 'Stock Result'],
+      ['Stock Result', 0, 'Reply: stock'], ['Stock Refused', 0, 'Reply: stock'], ['Stock Message', 0, 'Reply: stock'],
+      ['Save Stock Choices', 0, 'Reply: choices'],
+      ['Reply: stock', 0, 'Send Admin Reply'], ['Reply: choices', 0, 'Send Admin Reply']],
+  });
+
+  // T4 ------------------------------------------------------------------------
+  S.push({
+    key: 'tg_knowledge', color: 5,
+    title: 'T4 · Telegram admin: knowledge, notices, notes & WhatsApp replies',
+    note: '**Remember:** → permanent customer-facing knowledge, published at once (an explicit owner command is the approval; customer chats still go through the reviewed daily learning). **Temporary:** → a notice with scope, start, expiry (Asia/Dhaka), owner and version; no usable expiry → the bot asks. Expired notices are excluded when read, even before cleanup. **Note:** → a private staff note that never reaches customers or the AI. **Reply to 017…: text** → the exact text is queued as a human staff reply through the ONE dispatch branch (takeover applies; the 24-hour window, templates and emergency stop still decide whether it can be sent). Queued ≠ delivered: accepted/delivered/failed/unknown are reported separately.',
+    nodes: [
+      pg('Save Knowledge', `SELECT app.admin_save_knowledge((p->>'command_id')::uuid, p->>'title', p->>'body', p->>'category') AS r FROM ${jsonParam()}`,
+        "{ command_id: " + cmd + ".command_id, title: " + cmd + ".action.title, body: " + cmd + ".action.body, category: " + cmd + ".action.category }",
+        { sample: { command_id: UUID, title: 't', body: 'b', category: 'faq' } }),
+      code('Reply: knowledge', 'tg_reply.knowledge.js'),
+      ifNode('Has Expiry?', isTrue('={{ Boolean($json.action.expires_at) }}')),
+      pg('Save Notice', `SELECT app.admin_save_notice(p) AS r FROM ${jsonParam()}`,
+        "{ command_id: " + cmd + ".command_id, title: " + cmd + ".action.title, body: " + cmd + ".action.body, keywords: " + cmd + ".action.keywords || [], expires_at: " + cmd + ".action.expires_at, starts_at: " + cmd + ".action.starts_at || null }",
+        { sample: { command_id: UUID, title: 't', body: 'b', keywords: [], expires_at: '2030-01-01T00:00:00Z', starts_at: null } }),
+      pg('Ask Expiry', `SELECT app.admin_command_finish((p->>'command_id')::uuid, 'awaiting_expiry', '{}'::jsonb, NULL) AS ok, true AS ask FROM ${jsonParam()}`,
+        "{ command_id: " + cmd + ".command_id }", { sample: { command_id: UUID } }),
+      code('Reply: notice', 'tg_reply.notice.js'),
+      pg('Find Notices', `SELECT app.find_active_notices(p->>'match') AS n FROM ${jsonParam()}`, "{ match: " + cmd + ".action.match || '' }", { sample: { match: 'x' } }),
+      code('Pick Notice', 'tg_notice_pick.js'),
+      routeSwitch('Notice Route', ['cancel', 'choices', 'reply'], '$json.route'),
+      pg('Cancel Notice', `SELECT app.admin_cancel_notice((p->>'command_id')::uuid, (p->>'notice_key')::uuid) AS r FROM ${jsonParam()}`,
+        "{ command_id: " + cmd + ".command_id, notice_key: $json.notice_key }", { sample: { command_id: UUID, notice_key: UUID } }),
+      pg('Save Notice Choices', `SELECT app.admin_command_finish((p->>'command_id')::uuid, 'awaiting_choice', '{}'::jsonb, p->'choices') AS ok, p->'choices' AS choices FROM ${jsonParam()}`,
+        "{ command_id: " + cmd + ".command_id, choices: $json.choices }", { sample: { command_id: UUID, choices: [] } }),
+      code('Reply: cancel notice', 'tg_reply.cancel_notice.js'),
+      pg('Save Staff Note', `SELECT app.admin_save_staff_note((p->>'command_id')::uuid, p->>'body') AS r FROM ${jsonParam()}`,
+        "{ command_id: " + cmd + ".command_id, body: " + cmd + ".action.body }", { sample: { command_id: UUID, body: 'b' } }),
+      code('Reply: note', 'tg_reply.note.js'),
+      pg('Queue WhatsApp Reply', `SELECT app.admin_reply_whatsapp((p->>'command_id')::uuid, p->>'phone', p->>'text', nullif(p->>'conversation_id', '')::uuid) AS r FROM ${jsonParam()}`,
+        "{ command_id: " + cmd + ".command_id, phone: " + cmd + ".action.phone, text: " + cmd + ".action.text, conversation_id: (" + cmd + ".action.choice && " + up + ".r.pending && (" + up + ".r.pending.choices || [])[" + cmd + ".action.choice - 1]) ? " + up + ".r.pending.choices[" + cmd + ".action.choice - 1].conversation_id : null }",
+        { sample: { command_id: UUID, phone: '8801711111111', text: 'hi', conversation_id: null } }),
+      switchNode('WhatsApp Reply Route', [['queued', isTrue('={{ Boolean($json.r.ok) }}')], ['choices', eq('={{ $json.r.reason }}', 'ambiguous')], ['other', isTrue('={{ !$json.r.ok && $json.r.reason !== "ambiguous" }}')]]),
+      setRaw('Reply Outbound', '{ outbound_id: $json.r.outbound_id }'),
+      setRaw('Reply Choices', '{ choices: $json.r.choices }'),
+      code('Reply: whatsapp', 'tg_reply.whatsapp.js'),
+    ],
+    edges: [['Action Route', 2, 'Save Knowledge'], ['Save Knowledge', 0, 'Reply: knowledge'],
+      ['Action Route', 3, 'Has Expiry?'], ['Has Expiry?', 0, 'Save Notice'], ['Has Expiry?', 1, 'Ask Expiry'], ['Save Notice', 0, 'Reply: notice'], ['Ask Expiry', 0, 'Reply: notice'],
+      ['Action Route', 4, 'Find Notices'], ['Find Notices', 0, 'Pick Notice'], ['Pick Notice', 0, 'Notice Route'],
+      ['Notice Route', 0, 'Cancel Notice'], ['Cancel Notice', 0, 'Reply: cancel notice'], ['Notice Route', 1, 'Save Notice Choices'], ['Save Notice Choices', 0, 'Reply: choices'], ['Notice Route', 2, 'Reply: cancel notice'],
+      ['Action Route', 5, 'Save Staff Note'], ['Save Staff Note', 0, 'Reply: note'],
+      ['Action Route', 6, 'Queue WhatsApp Reply'], ['Queue WhatsApp Reply', 0, 'WhatsApp Reply Route'],
+      ['WhatsApp Reply Route', 0, 'Reply Outbound'], ['Reply Outbound', 0, 'Dispatch Queue'], ['WhatsApp Reply Route', 0, 'Reply: whatsapp'],
+      ['WhatsApp Reply Route', 1, 'Reply Choices'], ['Reply Choices', 0, 'Reply: choices'], ['WhatsApp Reply Route', 2, 'Reply: whatsapp'],
+      ['Reply: knowledge', 0, 'Send Admin Reply'], ['Reply: notice', 0, 'Send Admin Reply'], ['Reply: cancel notice', 0, 'Send Admin Reply'],
+      ['Reply: note', 0, 'Send Admin Reply'], ['Reply: whatsapp', 0, 'Send Admin Reply']],
+  });
+
+  // Canvas order: intake & authorization, Telegram commands, WhatsApp
+  // processing, AI, WooCommerce, knowledge, dispatch, notifications, maintenance.
+  const order = ['intake', 'tg_intake', 'tg_commands', 'tg_stock', 'tg_knowledge', 'media', 'reply', 'tools', 'vision', 'woo', 'dispatch', 'notify', 'sync', 'memory', 'learning', 'maintenance', 'history', 'errors', 'check'];
+  S.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
   return S;
 }
 
@@ -729,7 +940,10 @@ function toN8nJson(def) {
       saveDataErrorExecution: 'none',
       saveManualExecutions: true,
       timezone: 'Asia/Dhaka',
-      callerPolicy: 'none',
+      // The workflow is its own error workflow: after import set
+      // errorWorkflow and callerIds to this workflow's id (docs/SETUP.md).
+      // No other workflow may call it.
+      callerPolicy: 'workflowsFromAList',
     },
     pinData: {}, meta: { templateCredsSetupCompleted: false },
   };

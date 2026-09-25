@@ -61,13 +61,24 @@ BEGIN
       app.notification_facts(uuid), app.upsert_woo_order_ref(jsonb), app.upsert_woo_products(jsonb),
       app.get_webhook_event(uuid), app.due_outbound(integer), app.history_import_targets(integer),
       app.setting(text), app.setting_bool(text, boolean), app.setting_int(text, integer),
-      app.claim_event_route(uuid), app.recover_stale_ai_jobs(interval)
+      app.claim_event_route(uuid), app.recover_stale_ai_jobs(interval),
+      -- Telegram admin bot (0013). Pairing-code creation, admin setup and
+      -- notice rollback are backend-only.
+      app.telegram_accept_update(jsonb), app.telegram_pair(bigint, bigint, bigint, text), app.telegram_update_outcome(bigint, text),
+      app.admin_command_start(bigint, uuid, text, jsonb, text, uuid), app.admin_command_finish(uuid, text, jsonb, jsonb),
+      app.stock_change_begin(jsonb), app.stock_change_finish(uuid, text, jsonb, jsonb),
+      app.admin_save_knowledge(uuid, text, text, text), app.admin_save_notice(jsonb), app.find_active_notices(text),
+      app.admin_cancel_notice(uuid, uuid), app.admin_save_staff_note(uuid, text), app.active_notices_for(text),
+      app.admin_reply_whatsapp(uuid, text, text, uuid),
+      app.claim_admin_notifications(integer), app.finish_admin_notification(uuid, boolean, text), app.admin_daily_summary(),
+      app.notify_admin(text, text, text, text, text, uuid), app.notices_expiring_soon(), app.expire_stuck_stock_changes(),
+      app.dashboard_link(uuid), app.html_escape(text), app.redact_text(text)
     TO wa_n8n;
     -- Read access needed by the workflows, and the WooCommerce sync tables.
     GRANT SELECT ON app.settings, app.prompt_versions, app.conversations, app.messages, app.attachments,
                     app.channel_accounts, app.outbound_messages, app.webhook_events, app.ai_jobs, app.ai_drafts,
                     app.feedback, app.knowledge_documents, app.knowledge_versions, app.woo_products, app.woo_order_refs,
-                    app.pending_order_operations, app.health_checks, app.alerts, app.order_verifications
+                    app.pending_order_operations, app.health_checks, app.alerts, app.order_verifications, app.temporary_notices
       TO wa_n8n;
     GRANT INSERT, UPDATE, DELETE ON app.woo_products, app.woo_order_refs TO wa_n8n;
     GRANT INSERT, UPDATE ON app.health_checks, app.order_verifications TO wa_n8n;

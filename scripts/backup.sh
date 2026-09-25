@@ -25,4 +25,10 @@ else
 fi
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c \
   "SELECT app.record_health('backup', '$status', '$detail'::jsonb)" >/dev/null || true
+# A failed backup is an alert (dashboard + the Telegram "Backups" category);
+# a successful one appears in the daily summary.
+if [ "$status" != ok ]; then
+  psql "$DATABASE_URL" -q -c \
+    "SELECT app.raise_alert('backup_failed', 'critical', 'The nightly database backup failed', '{}'::jsonb, 'backup_failed:' || to_char(now(), 'YYYY-MM-DD'))" >/dev/null || true
+fi
 [ "$status" = ok ] && echo "backup ok: $file" || { echo "backup FAILED" >&2; exit 1; }

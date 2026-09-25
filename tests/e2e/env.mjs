@@ -79,7 +79,7 @@ export async function databases() {
 // minute so the scheduled branches execute during the test.
 export function testWorkflow({ production = false, fastSchedules = true, keepManual = null } = {}) {
   const wf = JSON.parse(readFileSync(path.join(ROOT, 'n8n', 'workflow', 'ids-whatsapp-ai-support.json'), 'utf8'));
-  const ids = { openrouter: 'e2eOpenRouter001', zernio: 'e2eZernio0000001', telegram: 'hC69Jo0AvNHRZ5PX', pg: 'e2ePostgres00001', woo: 'e2eWooCommerce01', hook: 'e2eInboundToken1', backend: 'e2eBackendToken1' };
+  const ids = CRED_IDS;
   const credByName = Object.fromEntries(Object.entries(JSON.parse(readFileSync(path.join(ROOT, 'n8n', 'credentials.json'), 'utf8'))).filter(([k]) => k !== '_comment').map(([k, v]) => [v.name, ids[k]]));
   for (const n of wf.nodes) {
     for (const c of Object.values(n.credentials || {})) c.id = credByName[c.name] || c.id;
@@ -99,23 +99,33 @@ export function testWorkflow({ production = false, fastSchedules = true, keepMan
   if (keepManual) { wf.name += ' (manual test copy)'; wf.nodes = wf.nodes.filter((n) => n.type !== 'n8n-nodes-base.webhook' && n.type !== 'n8n-nodes-base.scheduleTrigger'); }
   const names = new Set(wf.nodes.map((n) => n.name));
   for (const k of Object.keys(wf.connections)) if (!names.has(k)) delete wf.connections[k];
-  // The workflow is its own error workflow (section 14), as configured on the instance.
-  wf.settings.errorWorkflow = wf.id;
+  // The workflow is its own error workflow (section 14) and the only workflow
+  // allowed to call it, as configured on the instance.
+  Object.assign(wf.settings, { errorWorkflow: wf.id, callerPolicy: 'workflowsFromAList', callerIds: wf.id });
   wf.active = false;
   return wf;
 }
 
+// Local test credential ids, keyed like n8n/credentials.json.
+export const CRED_IDS = { openrouter: 'e2eOpenRouter001', zernio: 'e2eZernio0000001', telegramAdmin: 'e2eTelegramAdm01', pg: 'e2ePostgres00001',
+  wooRead: 'e2eWooRead000001', wooStock: 'e2eWooStock00001', hook: 'e2eInboundToken1', backend: 'e2eBackendToken1' };
+export const TG_TOKEN = '123456:TEST-ADMIN-BOT';
+
+// Test values for every credential the workflow uses; names come from
+// n8n/credentials.json so the binding by name is exercised as well.
 export function credentials() {
-  return [
-    { id: 'e2eOpenRouter001', name: 'IDS WA · OpenRouter', type: 'httpHeaderAuth', data: { name: 'Authorization', value: 'Bearer test-openrouter-key' } },
-    { id: 'e2eZernio0000001', name: 'IDS WA · Zernio', type: 'httpHeaderAuth', data: { name: 'Authorization', value: 'Bearer test-zernio-key' } },
-    { id: 'hC69Jo0AvNHRZ5PX', name: 'Telegram account', type: 'telegramApi', data: { accessToken: '123456:e2e-not-a-real-token' } },
-    { id: 'e2ePostgres00001', name: 'IDS WA · Postgres (wa_n8n)', type: 'postgres',
-      data: { host: new URL(ADMIN_URL).hostname, port: 5432, database: APP_DB, user: 'wa_n8n', password: 'n8n', ssl: 'disable', allowUnauthorizedCerts: false } },
-    { id: 'e2eWooCommerce01', name: 'IDS WA · WooCommerce (read-only)', type: 'wooCommerceApi', data: { url: MOCK + '/shop', consumerKey: 'ck_test', consumerSecret: 'cs_test', includeCredentialsInQuery: false } },
-    { id: 'e2eInboundToken1', name: 'IDS WA · Inbound token (backend to n8n)', type: 'httpHeaderAuth', data: { name: 'Authorization', value: 'Bearer ' + T.inbound } },
-    { id: 'e2eBackendToken1', name: 'IDS WA · Backend token (n8n to backend)', type: 'httpHeaderAuth', data: { name: 'X-Internal-Token', value: T.backend } },
-  ];
+  const names = JSON.parse(readFileSync(path.join(ROOT, 'n8n', 'credentials.json'), 'utf8'));
+  const data = {
+    openrouter: { name: 'Authorization', value: 'Bearer test-openrouter-key' },
+    zernio: { name: 'Authorization', value: 'Bearer test-zernio-key' },
+    telegramAdmin: { accessToken: TG_TOKEN, baseUrl: MOCK + '/tg' },
+    pg: { host: new URL(ADMIN_URL).hostname, port: 5432, database: APP_DB, user: 'wa_n8n', password: 'n8n', ssl: 'disable', allowUnauthorizedCerts: false },
+    wooRead: { url: MOCK + '/shop', consumerKey: 'ck_test', consumerSecret: 'cs_test', includeCredentialsInQuery: false },
+    wooStock: { url: MOCK + '/shop', consumerKey: 'ck_stock', consumerSecret: 'cs_stock', includeCredentialsInQuery: false },
+    hook: { name: 'Authorization', value: 'Bearer ' + T.inbound },
+    backend: { name: 'X-Internal-Token', value: T.backend },
+  };
+  return Object.entries(CRED_IDS).map(([k, id]) => ({ id, name: names[k].name, type: names[k].type, data: data[k] }));
 }
 
 export function n8nEnv() {

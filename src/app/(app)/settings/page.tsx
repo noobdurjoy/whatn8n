@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { containsBangla, fmtTime, useApi, useSession } from '@/components/session';
+import { TelegramAdmin } from '@/components/telegram-admin';
 
 const LABELS: Record<string, string> = {
   shop_name: 'Shop name', shop_base_url: 'Shop website (WooCommerce)', dashboard_url: 'Dashboard address (used in staff alerts)', default_mode: 'Mode for new conversations', agents_can_resume_ai: 'Support agents may resume AI',
@@ -9,7 +10,7 @@ const LABELS: Record<string, string> = {
   marketing_max_per_week: 'Max marketing messages per customer per week', burst_debounce_seconds: 'Wait for message bursts (seconds)',
   ai_daily_budget_usd: 'AI spending limit (USD, rolling 24h)', models: 'AI models', vision: 'Image understanding', attachments: 'Attachments',
   handoff_ack: 'Handoff acknowledgment (fixed text)', escalation_rules: 'Escalation rules', business_hours: 'Business hours',
-  response_time_targets: 'Response-time targets', notifications: 'Notifications', order_ops: 'Order operations', retention: 'Data retention',
+  response_time_targets: 'Response-time targets', order_ops: 'Order operations', retention: 'Data retention',
   followups: 'Follow-ups and reminders',
 };
 
@@ -20,6 +21,7 @@ export default function SettingsPage() {
     ...(can('settings') ? [['settings', 'Settings']] : []),
     ...(can('prompts') ? [['prompts', 'Prompts & test area']] : []),
     ...(can('canned_manage') ? [['canned', 'Canned replies']] : []),
+    ...(can('settings') ? [['telegram', 'Telegram']] : []),
     ['staff', 'Staff'],
   ];
   return (
@@ -32,6 +34,7 @@ export default function SettingsPage() {
       {tab === 'prompts' && <Prompts />}
       {tab === 'canned' && <Canned />}
       {tab === 'staff' && <Staff />}
+      {tab === 'telegram' && <TelegramAdmin />}
     </div></div>
   );
 }
@@ -66,7 +69,8 @@ function SettingsEditor() {
       {data.editable.map((key: string) => {
         const locked = data.owner_only.includes(key) && me.role !== 'owner';
         const value = key in draft ? draft[key] : byKey[key]?.value;
-        if (value === undefined) return null;
+        // Telegram notifications have their own editor (Telegram tab).
+        if (value === undefined || key === 'telegram_notifications') return null;
         return (
           <section key={key} className="card stack" aria-labelledby={`s-${key}`}>
             <div className="row" style={{ justifyContent: 'space-between' }}>

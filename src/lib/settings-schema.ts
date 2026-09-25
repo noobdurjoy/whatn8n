@@ -5,6 +5,8 @@ import { z } from 'zod';
 // WhatsApp policy and is read-only.
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const modelId = z.string().regex(/^[a-z0-9][\w.-]*\/[\w.:-]+$/i).max(120);
+export const NOTIFICATION_CATEGORIES = ['new_conversation', 'customer_message', 'ai_reply', 'staff_reply', 'delivery_failure', 'handoff', 'unresolved',
+  'orders', 'stock', 'knowledge', 'notice_expiring', 'api_failure', 'connection', 'spending', 'deployment', 'backup', 'admin_reply_status'] as const;
 const text3 = z.object({ en: z.string().max(500), bn: z.string().max(500).optional(), banglish: z.string().max(500).optional() });
 
 export const SETTINGS_SCHEMAS: Record<string, z.ZodTypeAny> = {
@@ -54,7 +56,13 @@ export const SETTINGS_SCHEMAS: Record<string, z.ZodTypeAny> = {
     after_hours_note: text3,
   }),
   response_time_targets: z.object({ first_response_minutes: z.number().int().min(1).max(1440), reminder_after_minutes: z.number().int().min(1).max(1440) }),
-  notifications: z.object({ telegram_enabled: z.boolean(), telegram_chat_id: z.string().regex(/^-?\d{0,20}$/), notify_on: z.array(z.string().max(40)).max(20) }),
+  // Telegram admin notifications (bot credential lives only in n8n). Each
+  // category is sent at once, collected into the daily summary, or not at all.
+  telegram_notifications: z.object({
+    enabled: z.boolean(),
+    max_per_minute: z.number().int().min(1).max(60),
+    categories: z.record(z.enum(NOTIFICATION_CATEGORIES), z.enum(['immediate', 'summary', 'disabled'])),
+  }),
   order_ops: z.object({ create_requires_staff_approval: z.boolean(), prefer_hosted_checkout: z.boolean(), unpaid_order_creation_enabled: z.boolean() }),
   retention: z.object({
     message_content_days: z.number().int().min(30).max(3650),

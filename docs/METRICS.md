@@ -39,4 +39,4 @@ A burst is a customer's messages sent within 10 minutes of each other; it counts
 - backup;
 - WhatsApp accounts.
 
-Alerts appear under **Open alerts**. They are forwarded to Telegram when `notifications.telegram_enabled` is on.
+Alerts appear under **Open alerts**. Each alert kind maps to a Telegram notification category (Settings → Telegram), sent immediately, in the 21:00 daily summary, or not at all.

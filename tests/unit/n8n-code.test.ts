@@ -357,3 +357,100 @@ describe('workflow export fidelity', () => {
     }
   });
 });
+
+describe('Telegram admin nodes', () => {
+  const up = (r: any = {}) => ({ r: { update_id: 7, chat_id: 42, admin_id: 'a1', text: '', pending: null, ...r }, dash: 'https://dash.example', shop: 'https://shop.example' });
+  it('reduces an update to ids, text and the forwarded flag only', async () => {
+    const [o] = await run('tg_input.js', { update_id: 9, message: { text: 'Set stock for SKU A to 1', chat: { id: 42, type: 'private' }, from: { id: 42, username: 'owner' },
+      forward_origin: { type: 'user' } } });
+    expect(o.json.p).toEqual({ update_id: 9, kind: 'message', user_id: 42, chat_id: 42, chat_type: 'private', text: 'Set stock for SKU A to 1', forwarded: true });
+    const [e] = await run('tg_input.js', { update_id: 10, edited_message: { text: 'Set stock for SKU A to 9', chat: { id: 42, type: 'private' }, from: { id: 42 } } });
+    expect(e.json.p.text).toBe('');   // edits never run again as commands
+  });
+  it('routes explicit forms by rules and everything else to the model', async () => {
+    const [a] = await run('tg_parse.js', up({ text: 'Set stock for SKU SPOTIFY-1M to 5' }));
+    expect(a.json).toMatchObject({ route: 'start', parsed_by: 'rules', action: { type: 'stock_set', sku: 'SPOTIFY-1M', quantity: 5 } });
+    const [b] = await run('tg_parse.js', up({ text: 'netflix er delivery kal porjonto late hobe' }));
+    expect(b.json.route).toBe('model');
+    const [c] = await run('tg_parse.js', up({ text: 'cancel' }));
+    expect(c.json).toMatchObject({ route: 'reply', reply: 'Nothing to cancel.' });
+  });
+  it('refuses a model proposal that rewords the WhatsApp text', async () => {
+    const req = { 'Build Command Request': { request: { model: 'deepseek/x' }, update_id: 7, chat_id: 42, admin_id: 'a1', text: 'tell 01350590593 that it is ready', followup: null } };
+    const resp = { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ type: 'reply_whatsapp', phone: '01350590593', text: 'Your account is ready!' }) } }] };
+    const [o] = await run('tg_model_check.js', resp, req);
+    expect(o.json.route).toBe('reply');
+    expect(o.json.usage.purpose).toBe('admin_command');
+  });
+  const cmd = (action: any) => ({ Command: { command_id: 'c1', action } });
+  it('resolves a variation SKU to its parent product and variation', async () => {
+    const [o] = await run('tg_stock_resolve.products.js', { statusCode: 200, body: [{ id: 19607, type: 'variation', parent_id: 4330, sku: 'NF-1M', name: 'Netflix Premium - 1 Month' }] },
+      cmd({ type: 'stock_adjust', sku: 'NF-1M', delta: -2 }));
+    expect(o.json).toEqual({ status: 'target', target: { product_id: 4330, variation_id: 19607, sku: 'NF-1M', name: 'Netflix Premium - 1 Month', permalink: null } });
+  });
+  it('offers choices instead of guessing, and narrows variations by the words given', async () => {
+    const [many] = await run('tg_stock_resolve.products.js', { statusCode: 200, body: [{ id: 555, name: 'Spotify Premium', sku: 'S1', type: 'simple' }, { id: 556, name: 'Spotify Family', sku: 'S2', type: 'simple' }] },
+      cmd({ type: 'stock_status', query: 'spotify', stock_status: 'outofstock' }));
+    expect(many.json.status).toBe('choices');
+    expect(many.json.choices.map((c: any) => c.product_id)).toEqual([555, 556]);
+    const product = { id: 4330, name: 'Netflix Premium', type: 'variable' };
+    const vars = [{ id: 19607, sku: 'NF-1M', attributes: [{ option: '1 Month' }] }, { id: 19608, sku: 'NF-3M', attributes: [{ option: '3 Months' }] }];
+    const [one] = await run('tg_stock_resolve.variations.js', { statusCode: 200, body: vars },
+      { ...cmd({ type: 'stock_status', query: 'Netflix 1 month', stock_status: 'outofstock' }), 'Resolve Stock Target (products)': { status: 'need_variations', product } });
+    expect(one.json.target).toMatchObject({ product_id: 4330, variation_id: 19607 });
+    const [both] = await run('tg_stock_resolve.variations.js', { statusCode: 200, body: vars },
+      { ...cmd({ type: 'stock_status', query: 'Netflix', stock_status: 'outofstock' }), 'Resolve Stock Target (products)': { status: 'need_variations', product } });
+    expect(both.json.status).toBe('choices');
+  });
+  it('plans set vs increment from the live values and never invents a quantity', async () => {
+    const nodes = (action: any) => ({ ...cmd(action), 'Stock Target': { target: { product_id: 123, variation_id: 0, sku: 'CANVA', name: 'Canva Pro' } } });
+    const managed = { statusCode: 200, body: { id: 123, manage_stock: true, stock_quantity: 10, stock_status: 'instock' } };
+    const [set] = await run('tg_stock_plan.js', managed, nodes({ type: 'stock_set', quantity: 5 }));
+    expect(set.json.write).toEqual({ stock_quantity: 5 });
+    expect(set.json.begin).toMatchObject({ op: 'set', command_id: 'c1', previous: { stock_quantity: 10 }, requested: { quantity: 5 } });
+    const [add] = await run('tg_stock_plan.js', managed, nodes({ type: 'stock_adjust', delta: 3 }));
+    expect(add.json.write).toEqual({ stock_quantity: 13 });
+    const unmanaged = { statusCode: 200, body: { id: 123, manage_stock: false, stock_quantity: null, stock_status: 'instock' } };
+    const [refuse] = await run('tg_stock_plan.js', unmanaged, nodes({ type: 'stock_set', quantity: 5 }));
+    expect(refuse.json.route).toBe('reply');
+    const [status] = await run('tg_stock_plan.js', unmanaged, nodes({ type: 'stock_status', stock_status: 'outofstock' }));
+    expect(status.json.write).toEqual({ stock_status: 'outofstock' });
+  });
+  it('reports success only after a matching read-back; a timeout is unknown', async () => {
+    const base = { 'Plan Stock Write': { write: { stock_quantity: 5 }, label: 'X', begin: { previous: { stock_quantity: 2 } } }, 'Begin Stock Change': { r: { stock_change_id: 's1' } } };
+    const ok = await run('tg_stock_verify.js', { statusCode: 200, body: { id: 1, stock_quantity: 5, stock_status: 'instock' } }, { ...base, 'Write Stock': { statusCode: 200 } });
+    expect(ok[0].json.status).toBe('succeeded');
+    const late = await run('tg_stock_verify.js', { statusCode: 200, body: { id: 1, stock_quantity: 2 } }, { ...base, 'Write Stock': { error: { message: 'timeout' } } });
+    expect(late[0].json.status).toBe('unknown');
+    const refused = await run('tg_stock_verify.js', { statusCode: 200, body: { id: 1, stock_quantity: 2 } }, { ...base, 'Write Stock': { statusCode: 400 } });
+    expect(refused[0].json.status).toBe('failed');
+  });
+  it('stranger answer never echoes content; notice reply shows the Dhaka expiry', async () => {
+    const [u] = await run('tg_reply.unauthorized.js', {}, { 'Accept Update': up({ route: 'unauthorized', text: 'SECRET' }) });
+    expect(u.json).toMatchObject({ chat_id: 42, text: 'This is a private bot.' });
+    const [n] = await run('tg_reply.notice.js', { r: { ok: true, version: 1, expires_at: '2026-09-26T12:00:00Z' } }, { 'Accept Update': up() });
+    expect(n.json.text).toContain('Sat 26 Sep 2026, 18:00 Asia/Dhaka');
+  });
+});
+
+describe('Telegram stock write node', () => {
+  const wf = JSON.parse(readFileSync(path.join(root, 'n8n/workflow/ids-whatsapp-ai-support.json'), 'utf8'));
+  const w = wf.nodes.find((n: any) => n.name === 'Write Stock');
+  it('uses the stock credential on a fixed product URL with only stock fields', () => {
+    expect(w.credentials.wooCommerceApi.name).toBe('IDS WooCommerce Stock');
+    expect(w.parameters.method).toBe('PUT');
+    expect(w.parameters.url).toMatch(/\/wp-json\/wc\/v3\/products\/' \+ Number\(/);
+    expect(w.parameters.url).not.toMatch(/orders|payment/);
+    const body = w.parameters.jsonBody.replace(/^=\{\{|\}\}$/g, '');
+    const evalBody = (write: any) => new Function('$', 'return ' + body)(() => ({ first: () => ({ json: { write } }) }));
+    expect(JSON.parse(evalBody({ stock_quantity: 5 }))).toEqual({ stock_quantity: 5 });
+    expect(JSON.parse(evalBody({ stock_status: 'outofstock' }))).toEqual({ stock_status: 'outofstock' });
+    expect(JSON.parse(evalBody({ stock_quantity: 5, price: '1', status: 'trash' }))).toEqual({ stock_quantity: 5 });
+    // Every other node using a WooCommerce credential only reads.
+    const woo = wf.nodes.filter((n: any) => n.credentials?.wooCommerceApi && n.name !== 'Write Stock');
+    for (const n of woo) {
+      expect(n.credentials.wooCommerceApi.name, n.name).toBe('IDS WooCommerce Read');
+      if (n.type === 'n8n-nodes-base.httpRequest') expect(n.parameters.method, n.name).toBe('GET');
+    }
+  });
+});

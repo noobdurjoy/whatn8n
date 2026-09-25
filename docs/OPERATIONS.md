@@ -71,6 +71,13 @@ Copy the backup directory off the host, for example with restic or rclone. The d
   3. record what happened: **I did it in WooCommerce** or **Not done**.
 - **Knowledge.** H proposes updates every night. Nothing reaches the AI until an admin approves and publishes it under **Knowledge**.
 - **Prompts.** New prompt versions must pass a run in *Settings → Prompts & test area* before they can be published.
+- **Telegram admin bot.** The paired owner/admin can work from Telegram. The bot understands English, Bangla and Banglish; send `/help` for the menu:
+  - check the status;
+  - change stock;
+  - save permanent knowledge, temporary notices and private notes;
+  - reply to a customer on WhatsApp with exact text.
+
+  Stock changes are confirmed only after WooCommerce reads back the new value. "Queued" is not "delivered": the bot reports accepted, delivered, failed and unknown separately. Everything the bot did is listed in **Settings → Telegram**, including notices (end, restore a version) and notes.
 
 ## Controls
 
@@ -81,6 +88,8 @@ Copy the backup directory off the host, for example with restic or rclone. The d
 | **Resume sending** | top bar (admin) | New messages are sent again. Messages that were queued or attempted during the stop stay **canceled**; resuming never releases them. Re-send by hand whatever is still needed |
 | Take over / Resume AI | conversation header | Per conversation |
 | Reviewed — allow AI again | conversation header | Clears an AI pause caused by an unknown outgoing origin |
+| Telegram access | Settings → Telegram (owner) | Pair with a one-time code, authorize by numeric id, **Revoke** (takes effect on the next message) |
+| Telegram notifications | Settings → Telegram | Per category: immediately, daily summary (21:00 Dhaka) or off |
 
 ## Runbooks
 
@@ -92,7 +101,7 @@ Copy the backup directory off the host, for example with restic or rclone. The d
 | `failed` | The provider rejected it |
 | `unknown` | Timeout or 5xx; see the next runbook |
 
-If there is no row at all, check **Operations → Open alerts**, then the n8n executions of A and B.
+If there is no row at all, check **Operations → Open alerts**, then run the connection check in n8n.
 
 **Send outcome unknown.** Every 5 minutes, the maintenance branch compares the message with Zernio's message list. It marks the message sent only when exactly one outgoing message with the same text exists. Otherwise it attaches the evidence to the alert. Check the customer's WhatsApp thread, then choose one of:
 
@@ -114,7 +123,7 @@ Stored events that were not processed are retried by the event sweep (every minu
 
 **n8n down** (**Automation offline** in the top bar; `/api/health/n8n` returns 503). Staff messages stay `queued` and AI jobs do not start, so nothing wrong is sent. Check that n8n is running and that the workflow is published. When n8n returns:
 
-- C's 15-second sweep sends the queued messages; each claim re-checks every control first.
+- The dispatch section's 15-second sweep sends the queued messages; each claim re-checks every control first.
 - The backend sweep re-delivers routing calls that n8n missed.
 
 **AI reply interrupted** (alert `ai_job_interrupted`). n8n restarted or crashed while a reply was being generated. After 10 minutes the maintenance branch marks the job failed and hands the conversation to staff (with the fixed acknowledgement in AUTO). Answer the customer from the dashboard.
@@ -134,6 +143,22 @@ Raise `ai_daily_budget_usd` in **Settings** if the spend is expected. The limit 
 - It imports the history of every known WhatsApp conversation (up to 50 pages of 100 messages each) as *historical* messages.
 - Historical messages are never answered and never count toward metrics.
 - Running it twice does not duplicate messages.
+
+**Telegram stock change says UNKNOWN.** WooCommerce did not confirm the change in time, and the read-back did not show the new value. Nothing is retried automatically. Open the product in WooCommerce:
+- if the value is already right, nothing else is needed;
+- otherwise send the command again (it is a new command, recorded separately).
+
+The change is listed under **Settings → Telegram → Recent bot commands and stock changes**.
+
+**Telegram bot does not answer.** Check these in order:
+1. The workflow is published.
+2. The `IDS Telegram Admin` credential holds the right token.
+3. The account is still listed as active in **Settings → Telegram**.
+4. You are writing in the **private** chat with the bot. The bot ignores groups and forwarded messages.
+
+A stranger gets "This is a private bot." at most once a day.
+
+**Telegram notifications stopped.** A Telegram send is retried at most 3 times, and the row then stays `failed` in `app.admin_notifications`. The customer-side action is never repeated because of this. Check the bot token, and that at least one admin is paired.
 
 **Personal data request.** From the customer panel:
 
