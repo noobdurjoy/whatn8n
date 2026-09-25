@@ -454,3 +454,19 @@ describe('Telegram stock write node', () => {
     }
   });
 });
+
+describe('workflow expressions', () => {
+  const wf = JSON.parse(readFileSync(path.join(root, 'n8n/workflow/ids-whatsapp-ai-support.json'), 'utf8'));
+  it('every {{ }} expression is valid JavaScript', () => {
+    const bad: string[] = [];
+    const walk = (v: any, where: string) => {
+      if (typeof v === 'string' && v.startsWith('=')) {
+        for (const m of v.matchAll(/\{\{([\s\S]*?)\}\}(?!\})/g)) {
+          try { new Function('$', '$json', '$input', '$prevNode', '$now', '$execution', '$workflow', 'return (' + m[1] + ');'); } catch (e: any) { bad.push(where + ': ' + e.message + ' :: ' + m[1].slice(0, 160)); }
+        }
+      } else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, where + '.' + k);
+    };
+    for (const n of wf.nodes) if (n.type !== 'n8n-nodes-base.code') walk(n.parameters, n.name);
+    expect(bad).toEqual([]);
+  });
+});

@@ -149,7 +149,9 @@ export function n8nEnv() {
 const n8nBin = () => path.join(N8N_DIR, 'node_modules', 'n8n', 'bin', 'n8n');
 
 export function n8nCli(args, opts = {}) {
-  return execFileSync(N8N_NODE, [n8nBin(), ...args], { env: n8nEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: opts.timeout || 240000 });
+  // A CLI run starts its own task broker; keep it off the running server's port.
+  const env = { ...n8nEnv(), N8N_RUNNERS_BROKER_PORT: '5699' };
+  return execFileSync(N8N_NODE, [n8nBin(), ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: opts.timeout || 240000 });
 }
 
 export function importWorkflow(wf) {

@@ -203,6 +203,11 @@ export function startMock({ port, key, cert }) {
         if (method === 'deleteWebhook') { state.tg.webhook = null; return send(res, 200, { ok: true, result: true }); }
         if (method === 'sendMessage') {
           if (state.behaviour.tgFail) { state.behaviour.tgFail--; return send(res, 502, { ok: false, description: 'Bad Gateway' }); }
+          // Fail the first message whose text matches (targets one notification).
+          if (state.behaviour.tgFailMatch && new RegExp(state.behaviour.tgFailMatch).test(json.text || '')) {
+            state.behaviour.tgFailMatch = null; state.tg.failed = (state.tg.failed || 0) + 1;
+            return send(res, 502, { ok: false, description: 'Bad Gateway' });
+          }
           state.tg.sent.push({ chat_id: String(json.chat_id), text: json.text, at: Date.now() });
           return send(res, 200, { ok: true, result: { message_id: ++state.seq, chat: { id: json.chat_id }, text: json.text } });
         }

@@ -723,7 +723,8 @@ function sections() {
   });
 
   // T3 ------------------------------------------------------------------------
-  const wooRest = (p) => "={{ " + up + ".shop + '/wp-json/wc/v3/products" + p + " }}";
+  // p continues the quoted path: '' or "/' + expr + '" (always re-opens a quote).
+  const wooRest = (p) => "={{ " + up + ".shop + '/wp-json/wc/v3/products" + p + "' }}";
   const restGet = (name, url, query) => ({ ...http(name, { url, query, full: true, timeout: 20000 }),
     parameters: { ...http(name, { url, query, full: true, timeout: 20000 }).parameters, authentication: 'predefinedCredentialType', nodeCredentialType: 'wooCommerceApi' },
     credentials: cred('wooRead') });

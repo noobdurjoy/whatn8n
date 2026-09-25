@@ -72,7 +72,8 @@ CREATE TABLE app.telegram_updates (
   authorized       boolean NOT NULL DEFAULT false,
   admin_id         uuid REFERENCES app.telegram_admins(id),
   text             text,
-  outcome          text
+  outcome          text,             -- what was decided (unauthorized, pair_*, command, …); set once
+  reply_status     text              -- whether the bot's answer went out (replied | reply_failed)
 );
 CREATE INDEX telegram_updates_user_idx ON app.telegram_updates (telegram_user_id, received_at DESC);
 
@@ -211,6 +212,8 @@ LANGUAGE plpgsql AS $$
 DECLARE s jsonb := app.setting('telegram_notifications'); v_mode text;
 BEGIN
   IF s IS NULL OR NOT coalesce((s ->> 'enabled')::boolean, true) THEN RETURN false; END IF;
+  -- Nobody paired yet: nothing to deliver, so nothing piles up for later.
+  IF NOT EXISTS (SELECT 1 FROM app.telegram_admins WHERE revoked_at IS NULL) THEN RETURN false; END IF;
   v_mode := coalesce(s -> 'categories' ->> p_category, 'summary');
   IF v_mode NOT IN ('immediate', 'summary') THEN RETURN false; END IF;
   INSERT INTO app.admin_notifications (category, dedupe_key, title, detail, link, mode, target_admin)
@@ -407,8 +410,10 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'admin_id', v_admin);
 END $$;
 
+-- Records whether the bot's answer was sent. It never overwrites the
+-- decision (the once-a-day stranger answer and the pairing rate limit read it).
 CREATE FUNCTION app.telegram_update_outcome(p_update bigint, p_outcome text) RETURNS void
-LANGUAGE sql AS $$ UPDATE app.telegram_updates SET outcome = left(p_outcome, 100) WHERE update_id = p_update $$;
+LANGUAGE sql AS $$ UPDATE app.telegram_updates SET reply_status = left(p_outcome, 40) WHERE update_id = p_update $$;
 
 -- ---------------------------------------------------------------------------
 -- Commands
@@ -442,6 +447,10 @@ BEGIN
   INSERT INTO app.admin_commands (update_id, admin_id, staff_id, text, action, parsed_by, parent_id)
   VALUES (p_update, p_admin, a.staff_id, app.redact_text(left(p_text, 4000)), p_action, p_parsed_by, p_parent) RETURNING id INTO v_id;
   UPDATE app.telegram_updates SET outcome = 'command' WHERE update_id = p_update;
+  -- Read-only commands are complete once accepted.
+  IF p_action ->> 'type' IN ('help', 'status', 'notice_list') THEN
+    UPDATE app.admin_commands SET status = 'succeeded', updated_at = now() WHERE id = v_id;
+  END IF;
   PERFORM app.audit('staff', a.staff_id, 'telegram.command', 'admin_command', v_id::text,
                     jsonb_build_object('type', p_action ->> 'type', 'update_id', p_update, 'parsed_by', p_parsed_by));
   RETURN jsonb_build_object('ok', true, 'command_id', v_id, 'staff_id', a.staff_id);
@@ -671,6 +680,11 @@ BEGIN
   END IF;
   v_conv := (v_matches -> 0 ->> 'conversation_id')::uuid;
   PERFORM set_config('app.admin_command', c.id::text, true);
+  -- A person is now answering this customer: HUMAN mode, AI sends and drafts
+  -- canceled, before the reply is queued.
+  IF (SELECT mode FROM app.conversations WHERE id = v_conv) <> 'HUMAN' THEN
+    PERFORM app.take_over(v_conv, 'staff', c.staff_id, 'telegram_admin_reply', jsonb_build_object('admin_command_id', c.id), false);
+  END IF;
   r := app.enqueue_staff_reply(v_conv, c.staff_id, p_text,
                                jsonb_build_object('origin', 'telegram_admin', 'admin_command_id', c.id), 'telegram:' || c.id);
   PERFORM set_config('app.admin_command', '', true);

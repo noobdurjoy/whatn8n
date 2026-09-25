@@ -1377,7 +1377,7 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products/' + Number($json.product_id) + ' }}",
+        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products/' + Number($json.product_id) + '' }}",
         "options": {
           "timeout": 20000,
           "response": {
@@ -1409,7 +1409,7 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products }}",
+        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products' }}",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -1454,7 +1454,7 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products }}",
+        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products' }}",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -1621,7 +1621,7 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products/' + Number($json.product.id) + '/variations }}",
+        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products/' + Number($json.product.id) + '/variations' }}",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -1769,7 +1769,7 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products' + (Number($json.target.variation_id) ? '/' + Number($json.target.product_id) + '/variations/' + Number($json.target.variation_id) : '/' + Number($json.target.product_id)) + ' }}",
+        "url": "={{ $('Accept Update').first().json.shop + '/wp-json/wc/v3/products' + (Number($json.target.variation_id) ? '/' + Number($json.target.product_id) + '/variations/' + Number($json.target.variation_id) : '/' + Number($json.target.product_id)) + '' }}",
         "options": {
           "timeout": 20000,
           "response": {
