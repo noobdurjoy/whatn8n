@@ -146,12 +146,16 @@ describe('E WooCommerce tools', () => {
   const parent = { id: 19906, name: 'Google One', type: 'variable', has_options: true, is_in_stock: true, is_purchasable: true,
     permalink: 'https://infinitydigitalshop.com/product/g1/', prices: { ...prices, price_range: { min_amount: '350', max_amount: '2500' } },
     attributes: [{ name: 'Validity', has_variations: true, terms: [{ name: '1 Month' }] }] };
-  const variation = { id: 19907, parent: 19906, type: 'variation', is_in_stock: true, is_purchasable: true, prices, attributes: [{ name: 'Validity', value: '1 Month' }] };
+  // Shape as returned by the live Store API (?parent=ID&type=variation): empty
+  // attributes, option text in "variation", HTML-encoded add_to_cart.url.
+  const variation = { id: 19907, parent: 19906, type: 'variation', variation: 'Validity: 1 Month', is_in_stock: true, is_purchasable: true, prices, attributes: [],
+    add_to_cart: { url: 'https://infinitydigitalshop.com/product/g1/?attribute_validity=1+Month&#038;variation_id=19907&#038;add-to-cart=19906' } };
   it('checkout link only for an existing in-stock variation, on the shop domain', async () => {
     const nodes = { ...shop, 'Woo Tool Request': { args: { product_id: 19906, variation_id: 19907, quantity: 1 } }, 'Get Checkout Product': { statusCode: 200, body: parent }, 'Get Checkout Variations': { statusCode: 200, body: [variation] } };
     const [o] = await run('e_format_products.checkout.js', {}, nodes);
     expect(o.json.ok).toBe(true);
-    expect(o.json.content.checkout_link).toBe('https://infinitydigitalshop.com/checkout/?add-to-cart=19907&quantity=1&attribute_validity=1%20Month');
+    expect(o.json.content.checkout_link).toBe('https://infinitydigitalshop.com/checkout/?attribute_validity=1+Month&variation_id=19907&add-to-cart=19906&quantity=1');
+    expect(o.json.content.option).toBe('Validity: 1 Month');
     expect(o.json.allowed_urls).toEqual([o.json.content.checkout_link]);
     const bad = await run('e_format_products.checkout.js', {}, { ...nodes, 'Woo Tool Request': { args: { product_id: 19906, variation_id: 1, quantity: 1 } } });
     expect(bad[0].json).toMatchObject({ ok: false, error: 'variation_not_found' });

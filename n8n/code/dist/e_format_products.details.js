@@ -41,6 +41,17 @@ function text(html, max) {
 function sameShop(u) {
   try { const x = new URL(u); return x.protocol === 'https:' && x.host === shopHost; } catch (e) { return false; }
 }
+// Query string of a Store API add_to_cart.url on the shop's own domain, e.g.
+// "attribute_validity=1+Month&variation_id=19607&add-to-cart=4330".
+function cartQuery(p) {
+  const raw = p && p.add_to_cart && typeof p.add_to_cart.url === 'string' ? p.add_to_cart.url.replace(/&#0?38;|&amp;/g, '&') : '';
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:' || u.host !== shopHost || !u.searchParams.get('add-to-cart')) return null;
+    u.searchParams.delete('quantity');
+    return u.searchParams.toString();
+  } catch (e) { return null; }
+}
 function summary(p) {
   return {
     product_id: p.id, name: text(p.name, 120), type: p.type, in_stock: Boolean(p.is_in_stock), purchasable: Boolean(p.is_purchasable),
@@ -68,8 +79,9 @@ const variations = vr.error || !Array.isArray(vr.data) ? [] : vr.data.filter((v)
 const vlist = variations.map((v) => ({
   variation_id: v.id,
   option: (v.variation || (v.attributes || []).map((a) => a.value).join(', ') || text(v.name, 80)),
-  attributes: (v.attributes || []).map((a) => ({ name: a.name, value: a.value })),
   in_stock: Boolean(v.is_in_stock), purchasable: Boolean(v.is_purchasable), prices: priceInfo(v),
+  // WooCommerce's own add-to-cart URL for this exact variation (HTML-encoded '&').
+  cart_query: cartQuery(v),
 }));
 
 if (KIND === 'details') {
@@ -98,16 +110,13 @@ if (p.type === 'variable' || p.has_options) {
   target = p.id;
 }
 if (p.sold_individually && qty > 1) return fail('quantity_not_allowed', 'This product can only be bought one at a time.');
-const params = ['add-to-cart=' + encodeURIComponent(String(target)), 'quantity=' + encodeURIComponent(String(qty))];
-if (chosen) {
-  for (const at of chosen.attributes) {
-    const slug = String(at.name || '').toLowerCase().trim().replace(/[^a-z0-9ঀ-৿]+/g, '-').replace(/^-+|-+$/g, '');
-    if (slug && at.value) params.push('attribute_' + encodeURIComponent(slug) + '=' + encodeURIComponent(at.value));
-  }
-}
+// The cart query comes from WooCommerce itself (variation id, parent id and
+// attribute values), so the link adds exactly that option.
+const query = chosen ? chosen.cart_query : (cartQuery(p) || 'add-to-cart=' + encodeURIComponent(String(target)));
+if (!query) return fail('checkout_link_unavailable', 'A checkout link cannot be made for this option right now. Offer a person.');
 // Hosted WooCommerce checkout: the customer pays on the shop's own checkout
 // page; no order is created and no payment is taken in chat.
-const link = base + '/checkout/?' + params.join('&');
+const link = base + '/checkout/?' + query + '&quantity=' + encodeURIComponent(String(qty));
 const unitPrice = chosen ? chosen.prices : priceInfo(p);
 return [{ json: { ok: true, ref: 'woo:checkout:' + p.id + ':' + (chosen ? chosen.variation_id : 0), price_data: true, verified_paid: false, error: null,
   allowed_urls: [link],
