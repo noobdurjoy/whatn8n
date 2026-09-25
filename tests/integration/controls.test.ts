@@ -492,3 +492,29 @@ describe('order operations', () => {
     expect((await sql(`SELECT 1 FROM app.alerts WHERE kind = 'order_op_unknown' AND resolved_at IS NULL`)).length).toBe(0);
   });
 });
+
+describe('AI budget', () => {
+  it('a reply job stopped by the budget hands the conversation to staff and alerts once a day', async () => {
+    const a = await newConversation('netflix dam koto?');
+    const b = await newConversation('spotify ache?');
+    const ja = await startJob(a.conversation.id);
+    const jb = await startJob(b.conversation.id);
+    await one(`SELECT app.fail_ai_job($1, 'ai_budget_reached')`, [ja.job_id]);
+    await one(`SELECT app.fail_ai_job($1, 'ai_budget_reached')`, [jb.job_id]);
+    for (const id of [a.conversation.id, b.conversation.id]) {
+      const c = await conv(id);
+      expect(c.mode).toBe('HUMAN');
+      expect(c.mode_reason).toBe('ai_budget_reached');
+      expect(c.queue_state).toBe('waiting_staff');
+      expect((await sql(`SELECT 1 FROM app.outbound_messages WHERE conversation_id = $1 AND kind = 'handoff_ack'`, [id])).length).toBe(1);
+    }
+    expect((await sql(`SELECT 1 FROM app.alerts WHERE kind = 'ai_budget_reached'`)).length).toBe(1);
+  });
+
+  it('other failures do not change the mode', async () => {
+    const a = await newConversation('hi');
+    const j = await startJob(a.conversation.id);
+    await one(`SELECT app.fail_ai_job($1, 'model_error')`, [j.job_id]);
+    expect((await conv(a.conversation.id)).mode).toBe('AUTO');
+  });
+});
