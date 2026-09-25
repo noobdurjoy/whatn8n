@@ -3,6 +3,10 @@
 // validated classifier/model intents for this turn. The model never decides
 // whether a rule is enabled.
 
+/**
+ * @param {{ rules: any, intents?: string[], decision?: string, handoffReason?: string | null, state?: any, handoffPhrase?: string | null }} input
+ * @returns {{ handoff: boolean, reason: string | null, suppressed?: string }}
+ */
 export function evaluateEscalation({ rules, intents, decision, handoffReason, state, handoffPhrase }) {
   const r = rules || {};
   const on = (k) => Boolean(r[k] && r[k].enabled);

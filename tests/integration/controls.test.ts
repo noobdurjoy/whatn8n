@@ -357,7 +357,7 @@ describe('send outcomes and the messaging window', () => {
       [conversation.id, agent])).r;
     const d = await dispatchOnce(tpl.outbound_id, z.fn);
     expect(d.outcome).toBe('accepted');
-    expect(d.body.template.elements[0].name).toBe('order_update');
+    expect(d.body!.template.elements[0].name).toBe('order_update');
     expect(z.sent.length).toBe(1);
   });
 });
@@ -378,7 +378,7 @@ describe('copilot drafts', () => {
     expect(ok.ok).toBe(true);
     const z = fakeZernio();
     const d = await dispatchOnce(ok.outbound_id, z.fn);
-    expect(d.body.message).toBe('Edited reply');
+    expect(d.body!.message).toBe('Edited reply');
     expect((await one(`SELECT author_type FROM app.messages WHERE outbound_id = $1`, [ok.outbound_id])).author_type).toBe('staff');
   });
 
@@ -430,5 +430,24 @@ describe('history import', () => {
     expect(c.mode).toBe('AUTO');                              // the old "human please" did not hand off
     expect((await sql(`SELECT count(*)::int AS n FROM app.messages WHERE conversation_id = $1 AND is_historical`, [conversation.id]))[0].n).toBe(2);
     expect((await sql(`SELECT 1 FROM app.webhook_events`)).length).toBe(1); // only the live message was an event
+  });
+});
+
+describe('customer identity scoping', () => {
+  it('different WhatsApp BSUIDs never merge into one customer, even if a weaker id matches', async () => {
+    const a = await newConversation('hi', { bsuid: 'BD.PERSON-A', phone: '+8801755555555' });
+    const b = await newConversation('hello', { bsuid: 'BD.PERSON-B', phone: '+8801766666666' });
+    // Force a shared participant id (e.g. a re-used number) on the second person.
+    const p = fixture('message.received.banglish.json', { convId: b.convId, bsuid: 'BD.PERSON-B', phone: '+8801755555555' });
+    await ingest(p);
+    const ca = await conv(a.conversation.id);
+    const cb = await conv(b.conversation.id);
+    expect(ca.customer_id).not.toBe(cb.customer_id);
+  });
+
+  it('the same BSUID in a new conversation resolves to the same customer', async () => {
+    const a = await newConversation('hi', { bsuid: 'BD.SAME', phone: '+8801777777777' });
+    const b = await newConversation('again', { bsuid: 'BD.SAME', phone: '+8801777777777' });
+    expect((await conv(a.conversation.id)).customer_id).toBe((await conv(b.conversation.id)).customer_id);
   });
 });

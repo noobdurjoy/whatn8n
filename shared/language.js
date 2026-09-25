@@ -9,7 +9,9 @@ const BANGLISH_MARKERS = [
   'bolben', 'janaben', 'kotha', 'sathe', 'shathe', 'kno', 'keno', 'kobe', 'kokhon', 'ekhon', 'ekta', 'ekti', 'dilam',
   'dise', 'diyechi', 'pathabo', 'pathan', 'pathiye', 'hoy', 'hocche', 'hochhe', 'hoise', 'hoyeche', 'lagbe', 'thik',
   'accha', 'acha', 'dhonnobad', 'dao', 'kinbo', 'kinte', 'mas', 'maser', 'shob', 'sob', 'valo',
-  'bhalo', 'jonno', 'jnno', 'theke', 'pore', 'ki',
+  'bhalo', 'jonno', 'jnno', 'theke', 'pore', 'ki', 'jabe', 'jai', 'jay', 'chalano', 'chalabo', 'dekhte', 'dekhben', 'pabo',
+  'paben', 'pai', 'paisi', 'pailam', 'korlam', 'korsi', 'hoilo', 'hoye', 'gese', 'geche', 'ase', 'asen', 'achen', 'apnader', 'amader',
+  'bujhlam', 'bujhi', 'ekhono', 'akhono', 'kintu', 'tahole', 'naki', 'ache?', 'dite', 'diben', 'nibo', 'niben', 'koren', 'korun',
 ];
 const MARKER_RE = new RegExp(`(?:^|[^a-z])(?:${BANGLISH_MARKERS.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?=$|[^a-z])`, 'g');
 

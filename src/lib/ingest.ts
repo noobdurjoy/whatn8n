@@ -148,30 +148,59 @@ async function ensureAccount(c: pg.PoolClient, m: { provider_account_id: string;
   return acct as { id: string; shop_id: string; enabled: boolean };
 }
 
-async function ensureCustomer(c: pg.PoolClient, shopId: string, accountId: string, p: NormalizedMessage['participant']) {
+async function ensureCustomer(c: pg.PoolClient, shopId: string, accountId: string, p: NormalizedMessage['participant'],
+                              providerConversationId?: string, fromEcho = false) {
   const ids: Array<[string, string]> = [];
   if (p.bsuid) ids.push(['bsuid', p.bsuid]);
   if (p.phone_e164) ids.push(['phone', p.phone_e164]);
   if (p.participant_id) ids.push(['participant_id', p.participant_id]);
   if (!ids.length) throw new NormalizeError('no participant identity');
 
+  // The BSUID is Meta's canonical per-business identity (Zernio docs): a
+  // customer whose stored BSUID differs is a different person, even if a
+  // weaker identifier (phone, participant id) matches. Never merge across it.
   let customerId: string | null = null;
-  for (const [kind, value] of ids) {
+  // An existing conversation already belongs to one customer: every message
+  // in it is attributed to that customer.
+  if (providerConversationId) {
+    const existing = await c.query(
+      `SELECT customer_id FROM app.conversations WHERE channel_account_id = $1 AND provider_conversation_id = $2`,
+      [accountId, providerConversationId]);
+    if (existing.rows[0]) customerId = existing.rows[0].customer_id;
+  }
+  for (const [kind, value] of customerId ? [] : ids) {
     const r = await c.query(
       `SELECT customer_id FROM app.customer_identities WHERE channel_account_id = $1 AND identity_kind = $2 AND identity_value = $3`,
       [accountId, kind, value]);
-    if (r.rows[0]) { customerId = r.rows[0].customer_id; break; }
+    if (!r.rows[0]) continue;
+    if (kind !== 'bsuid' && p.bsuid) {
+      const other = await c.query(
+        `SELECT 1 FROM app.customer_identities WHERE customer_id = $1 AND channel_account_id = $2 AND identity_kind = 'bsuid' AND identity_value <> $3`,
+        [r.rows[0].customer_id, accountId, p.bsuid]);
+      if (other.rowCount) continue;
+    }
+    customerId = r.rows[0].customer_id;
+    break;
   }
   if (!customerId) {
     customerId = (await c.query(
       `INSERT INTO app.customers (shop_id, display_name, phone_e164) VALUES ($1, $2, $3) RETURNING id`,
       [shopId, p.display_name, p.phone_e164])).rows[0].id;
   } else if (p.display_name || p.phone_e164) {
+    // The customer's own inbound profile name wins; our outgoing echoes only
+    // fill a missing name.
     await c.query(
-      `UPDATE app.customers SET display_name = coalesce($2, display_name), phone_e164 = coalesce(phone_e164, $3), updated_at = now()
-        WHERE id = $1 AND deleted_at IS NULL`, [customerId, p.display_name, p.phone_e164]);
+      `UPDATE app.customers SET display_name = CASE WHEN $4 THEN coalesce(display_name, $2) ELSE coalesce($2, display_name) END,
+              phone_e164 = coalesce(phone_e164, $3), updated_at = now()
+        WHERE id = $1 AND deleted_at IS NULL`, [customerId, p.display_name, p.phone_e164, fromEcho]);
   }
   for (const [kind, value] of ids) {
+    if (kind === 'bsuid') {
+      const clash = await c.query(
+        `SELECT 1 FROM app.customer_identities WHERE customer_id = $1 AND channel_account_id = $2 AND identity_kind = 'bsuid' AND identity_value <> $3`,
+        [customerId, accountId, value]);
+      if (clash.rowCount) continue; // never attach a second person's BSUID
+    }
     await c.query(
       `INSERT INTO app.customer_identities (customer_id, channel_account_id, identity_kind, identity_value, provider_contact_id)
        VALUES ($1, $2, $3, $4, $5) ON CONFLICT (channel_account_id, identity_kind, identity_value) DO NOTHING`,
@@ -209,7 +238,7 @@ async function insertAttachments(c: pg.PoolClient, messageId: string, m: Normali
 
 async function applyInbound(c: pg.PoolClient, m: NormalizedMessage): Promise<Route> {
   const acct = await ensureAccount(c, m);
-  const customerId = await ensureCustomer(c, acct.shop_id, acct.id, m.participant);
+  const customerId = await ensureCustomer(c, acct.shop_id, acct.id, m.participant, m.provider_conversation_id);
   const { conv, created } = await ensureConversation(c, acct, customerId, m);
 
   const ins = await c.query(
@@ -241,8 +270,14 @@ async function applyInbound(c: pg.PoolClient, m: NormalizedMessage): Promise<Rou
       WHERE id = $1 RETURNING revision, mode`,
     [conv.id, m.sent_at, m.text, m.kind, firstMinutes]);
 
+  // Short English-looking messages ("ok", "TV?") do not override an
+  // earlier Bangla/Banglish detection.
   if (language) {
-    await c.query(`UPDATE app.customers SET preferred_language = $2, updated_at = now() WHERE id = $1`, [customerId, language]);
+    const words = (m.text ?? '').trim().split(/\s+/).length;
+    await c.query(
+      `UPDATE app.customers SET preferred_language = $2, updated_at = now()
+        WHERE id = $1 AND NOT ($2 = 'en' AND $3 < 5 AND preferred_language IN ('bn', 'banglish'))`,
+      [customerId, language, words]);
   }
   if (detectMarketingOptOut(m.text)) {
     await c.query(`UPDATE app.customers SET marketing_consent = 'opted_out', marketing_consent_at = now() WHERE id = $1`, [customerId]);
@@ -290,7 +325,7 @@ async function applyInbound(c: pg.PoolClient, m: NormalizedMessage): Promise<Rou
 
 async function applyOutgoingEcho(c: pg.PoolClient, m: NormalizedMessage, priorAttempts: number): Promise<Route | 'defer'> {
   const acct = await ensureAccount(c, m);
-  const customerId = await ensureCustomer(c, acct.shop_id, acct.id, m.participant);
+  const customerId = await ensureCustomer(c, acct.shop_id, acct.id, m.participant, m.provider_conversation_id, true);
   const { conv } = await ensureConversation(c, acct, customerId, m);
 
   const existing = (await c.query(
@@ -473,7 +508,7 @@ export async function importHistoricalMessages(input: {
       interactive: null, kind: 'text',
     };
     const acct = await ensureAccount(c, pseudo);
-    const customerId = await ensureCustomer(c, acct.shop_id, acct.id, input.participant);
+    const customerId = await ensureCustomer(c, acct.shop_id, acct.id, input.participant, input.provider_conversation_id);
     const { conv } = await ensureConversation(c, acct, customerId, pseudo);
     let inserted = 0;
     for (const h of input.messages) {

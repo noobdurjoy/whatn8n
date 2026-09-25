@@ -73,7 +73,12 @@ export function classifySendResult(input) {
 
 // Builds the Zernio request body from a claimed outbox row. Only fields the
 // API documents are used; unknown payload keys are dropped.
+/**
+ * @param {any} claim
+ * @returns {Record<string, any>}
+ */
 export function buildSendBody(claim) {
+  /** @type {Record<string, any>} */
   const body = { accountId: claim.provider_account_id };
   const p = claim.payload || {};
   if (p.template && typeof p.template.name === 'string') {

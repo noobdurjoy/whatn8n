@@ -48,6 +48,7 @@ BEGIN
       app.finish_order_operation(uuid, text, bigint, jsonb),
       app.submit_knowledge_proposal(text, uuid, text, text, text, text, jsonb, jsonb, text),
       app.raise_alert(text, text, text, jsonb, text),
+      app.get_outbound_upload(uuid), app.set_outbound_media_url(uuid, text),
       app.setting(text), app.setting_bool(text, boolean), app.setting_int(text, integer)
     TO wa_n8n;
     -- Read access needed by the workflows, and the WooCommerce sync tables.

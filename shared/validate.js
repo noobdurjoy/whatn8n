@@ -49,6 +49,11 @@ export function parseModelJson(content) {
 //   verified_paid_order  true only when a trusted order-status tool result shows payment
 //   allowed_urls         URLs present in tool results / approved knowledge this turn
 //   customer_language    detected language (overrides the model's label)
+/**
+ * @param {any} raw
+ * @param {any} [ctx]
+ * @returns {{ ok: boolean, errors?: string[], value?: any }}
+ */
 export function validateReply(raw, ctx) {
   const errors = [];
   const c = ctx || {};
@@ -125,6 +130,10 @@ function cleanStrList(v, maxItems, maxLen) {
 
 // Validates the vision model's observation object. Returns a normalized copy
 // or errors; an invalid result is recorded as a failed analysis, never used.
+/**
+ * @param {any} raw
+ * @returns {{ ok: boolean, errors?: string[], value?: any }}
+ */
 export function validateVisionResult(raw) {
   const errors = [];
   if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };
