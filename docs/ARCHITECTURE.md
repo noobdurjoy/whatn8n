@@ -90,5 +90,7 @@ The AI cannot change orders. It can only record a request with `propose_order_ch
 
 - **Database or permission check unavailable:** the claim fails, so nothing is sent.
 - **Emergency stop** (`sending_enabled = false`): every claim is refused, including staff messages and order-operation claims.
-- **AI budget exceeded:** G and H skip, and B hands off.
+- **Daily AI budget used up** (`ai_daily_budget_usd`):
+  - B hands the conversation to staff and raises one alert per day.
+  - Vision, G and H skip their model calls.
 - **Model usage missing from a response:** stored as *unavailable*, never as zero.
