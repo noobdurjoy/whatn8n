@@ -8,7 +8,7 @@ const SHOP = 'https://infinitydigitalshop.com';
 return [{ json: {
   shop: SHOP,
   chat_model: 'deepseek/deepseek-v4.1-flash',
-  vision_model: 'qwen/qwen3.7-flash',
+  vision_model: 'stealth/space-bunny-alpha',
   image_types: ['product_photo', 'error_screenshot', 'payment_receipt', 'order_screenshot', 'chat_screenshot', 'document', 'other', 'unclear'],
   chat_request: {
     model: 'deepseek/deepseek-v4.1-flash',
