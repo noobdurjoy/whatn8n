@@ -44,12 +44,69 @@
     },
     {
       "id": "i_maintenance-03",
+      "name": "Sweep URL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        180
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.setting('dashboard_url') #>> '{}' AS url",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-04",
+      "name": "Sweep Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}/api/internal/events/sweep",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": null,
+          "name": "WA Backend Internal Token"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "i_maintenance-05",
       "name": "Claim Alerts",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
         520,
-        0
+        180
       ],
       "parameters": {
         "operation": "executeQuery",
@@ -65,7 +122,7 @@
       "executeOnce": true
     },
     {
-      "id": "i_maintenance-04",
+      "id": "i_maintenance-06",
       "name": "Alert Input",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
@@ -80,7 +137,7 @@
       }
     },
     {
-      "id": "i_maintenance-05",
+      "id": "i_maintenance-07",
       "name": "Notify Alert",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
@@ -102,7 +159,7 @@
       }
     },
     {
-      "id": "i_maintenance-06",
+      "id": "i_maintenance-08",
       "name": "Every 5 Minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -122,13 +179,13 @@
       }
     },
     {
-      "id": "i_maintenance-07",
+      "id": "i_maintenance-09",
       "name": "Overdue Reminders",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
         260,
-        180
+        360
       ],
       "parameters": {
         "operation": "executeQuery",
@@ -143,13 +200,13 @@
       }
     },
     {
-      "id": "i_maintenance-08",
+      "id": "i_maintenance-10",
       "name": "Pending Media",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
         260,
-        360
+        540
       ],
       "parameters": {
         "operation": "executeQuery",
@@ -165,13 +222,13 @@
       "executeOnce": true
     },
     {
-      "id": "i_maintenance-09",
+      "id": "i_maintenance-11",
       "name": "Retry Media",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
       "position": [
         520,
-        180
+        360
       ],
       "parameters": {
         "source": "database",
@@ -187,13 +244,13 @@
       }
     },
     {
-      "id": "i_maintenance-10",
+      "id": "i_maintenance-12",
       "name": "Unknown Sends",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
         260,
-        540
+        720
       ],
       "parameters": {
         "operation": "executeQuery",
@@ -209,13 +266,13 @@
       "executeOnce": true
     },
     {
-      "id": "i_maintenance-11",
+      "id": "i_maintenance-13",
       "name": "Reconcile Each",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
       "position": [
         520,
-        360
+        540
       ],
       "parameters": {
         "source": "database",
@@ -231,7 +288,7 @@
       }
     },
     {
-      "id": "i_maintenance-12",
+      "id": "i_maintenance-14",
       "name": "Unknown Send",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1.1,
@@ -244,13 +301,13 @@
       }
     },
     {
-      "id": "i_maintenance-13",
+      "id": "i_maintenance-15",
       "name": "List Provider Messages",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
         260,
-        720
+        900
       ],
       "parameters": {
         "method": "GET",
@@ -293,20 +350,20 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "i_maintenance-14",
+      "id": "i_maintenance-16",
       "name": "Match Unknown Send",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         520,
-        540
+        720
       ],
       "parameters": {
         "jsCode": "// WA · I Maintenance — \"Match Unknown Send\"\n// Input: the conversation's recent messages from Zernio for ONE send whose\n// outcome is unknown (timeout or 5xx). Exactly one outgoing message with the\n// same text, sent after the outbox row was created, is provider evidence and\n// resolves the send as sent. Anything else is attached to the alert for a\n// person to decide; nothing is re-sent automatically.\n\nconst u = $('Unknown Send').first().json;\nconst r = $input.first().json || {};\nconst status = typeof r.statusCode === 'number' ? r.statusCode : null;\nif (r.error || status === null || status < 200 || status >= 300) {\n  return [{ json: { action: 'evidence', outbound_id: u.outbound_id, evidence: { error: 'provider_lookup_failed', http_status: status } } }];\n}\nconst body = typeof r.body === 'string' ? JSON.parse(r.body) : (r.body || {});\nconst created = Date.parse(u.created_at) - 60 * 1000;\nconst norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();\nconst want = norm(u.body);\nconst candidates = (Array.isArray(body.messages) ? body.messages : [])\n  .filter((m) => m.direction === 'outgoing' && Date.parse(m.createdAt) >= created)\n  .map((m) => ({ id: m.id, created_at: m.createdAt, same_text: want !== '' && norm(m.message) === want }));\nconst exact = candidates.filter((c) => c.same_text);\nif (exact.length === 1 && exact[0].id) {\n  return [{ json: { action: 'resolve', outbound_id: u.outbound_id, provider_message_id: exact[0].id,\n    evidence: { method: 'provider_message_list_exact_text', candidate: exact[0], checked_at: new Date().toISOString() } } }];\n}\nreturn [{ json: { action: 'evidence', outbound_id: u.outbound_id, evidence: { candidates: candidates.slice(0, 10), exact_matches: exact.length } } }];\n"
       }
     },
     {
-      "id": "i_maintenance-15",
+      "id": "i_maintenance-17",
       "name": "Reconcile Route",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.2,
@@ -367,7 +424,7 @@
       }
     },
     {
-      "id": "i_maintenance-16",
+      "id": "i_maintenance-18",
       "name": "Resolve Send",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
@@ -390,7 +447,7 @@
       }
     },
     {
-      "id": "i_maintenance-17",
+      "id": "i_maintenance-19",
       "name": "Attach Evidence",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
@@ -413,7 +470,7 @@
       }
     },
     {
-      "id": "i_maintenance-18",
+      "id": "i_maintenance-20",
       "name": "Daily 04:10",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -435,13 +492,13 @@
       }
     },
     {
-      "id": "i_maintenance-19",
+      "id": "i_maintenance-21",
       "name": "Apply Retention",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
         260,
-        900
+        1080
       ],
       "parameters": {
         "operation": "executeQuery",
@@ -464,6 +521,11 @@
             "node": "Expire Leases",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Sweep URL",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -473,6 +535,17 @@
         [
           {
             "node": "Claim Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sweep URL": {
+      "main": [
+        [
+          {
+            "node": "Sweep Events",
             "type": "main",
             "index": 0
           }

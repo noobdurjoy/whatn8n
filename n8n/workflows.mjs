@@ -494,6 +494,10 @@ function definitions() {
     nodes: [
       schedule('Every Minute', { field: 'minutes', minutesInterval: 1 }),
       pg('Expire Leases', "SELECT app.expire_send_leases() AS expired, app.record_health('n8n_maintenance', 'ok', jsonb_build_object('at', now())) IS NULL AS health", null),
+      pg('Sweep URL', "SELECT app.setting('dashboard_url') #>> '{}' AS url", null),
+      // Backend retry of webhook events that were stored but not finished
+      // (crash, deploy, deferred echoes) and of routing calls n8n missed.
+      http('Sweep Events', { method: 'POST', url: "={{ $json.url }}/api/internal/events/sweep", auth: CRED.backend, json: '={}', timeout: 20000 }),
       pg('Claim Alerts', `UPDATE app.alerts SET notified_at = now() WHERE id IN (
          SELECT id FROM app.alerts WHERE resolved_at IS NULL AND notified_at IS NULL ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED)
        RETURNING id, kind, severity, message, details`, null, { executeOnce: true }),
@@ -521,7 +525,7 @@ function definitions() {
       schedule('Daily 04:10', { field: 'days', daysInterval: 1, triggerAtHour: 4, triggerAtMinute: 10 }),
       pg('Apply Retention', 'SELECT app.apply_retention() AS r', null),
     ],
-    edges: [['Every Minute', 0, 'Expire Leases'], ['Expire Leases', 0, 'Claim Alerts'], ['Claim Alerts', 0, 'Alert Input'], ['Alert Input', 0, 'Notify Alert'],
+    edges: [['Every Minute', 0, 'Expire Leases'], ['Expire Leases', 0, 'Claim Alerts'], ['Every Minute', 0, 'Sweep URL'], ['Sweep URL', 0, 'Sweep Events'], ['Claim Alerts', 0, 'Alert Input'], ['Alert Input', 0, 'Notify Alert'],
       ['Every 5 Minutes', 0, 'Overdue Reminders'], ['Every 5 Minutes', 0, 'Pending Media'], ['Pending Media', 0, 'Retry Media'],
       ['Every 5 Minutes', 0, 'Unknown Sends'], ['Unknown Sends', 0, 'Reconcile Each'],
       ['Unknown Send', 0, 'List Provider Messages'], ['List Provider Messages', 0, 'Match Unknown Send'], ['Match Unknown Send', 0, 'Reconcile Route'],
