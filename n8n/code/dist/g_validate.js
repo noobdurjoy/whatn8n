@@ -1,19 +1,25 @@
+// WA · G Memory — "Validate Summary"
+// Server-side checks on the summary model's output. Only preferences the
+// customer stated, with a known key and a source message from that customer,
+// are kept (the database checks the source again). Values with secrets are
+// dropped, not stored.
+// ---- begin shared/validate.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Server-side validation of model output. Dependency-free; inlined into n8n
 // Code nodes and imported by the backend and tests. JSON from a model is never
 // trusted to match its schema: everything is checked here before use.
 
-export const REPLY_DECISIONS = ['reply', 'handoff', 'no_reply'];
-export const HANDOFF_REASONS = [
+const REPLY_DECISIONS = ['reply', 'handoff', 'no_reply'];
+const HANDOFF_REASONS = [
   'customer_requested_human', 'unresolved_complaint', 'repeated_failed_answers', 'refund_request',
   'unavailable_information', 'purchase_intent', 'order_change_request', 'payment_verification',
   'unsupported_media', 'sensitive_request', 'other',
 ];
-export const INTENTS = [
+const INTENTS = [
   'greeting', 'product_question', 'price_question', 'purchase_intent', 'order_status', 'payment_issue',
   'refund_request', 'cancellation', 'delivery_issue', 'renewal', 'access_issue', 'complaint',
   'human_request', 'image_question', 'thanks', 'other',
 ];
-export const LANGS = ['bn', 'en', 'banglish'];
+const LANGS = ['bn', 'en', 'banglish'];
 
 const INTERNAL_LEAK_RE = /<\/?think>|\bchain[- ]of[- ]thought\b|\bsystem prompt\b|\bmy instructions\b|\bas an ai language model\b|\btool_call\b|\bfunction call\b|"decision"\s*:/i;
 const VIEWED_IMAGE_RE = /\b(?:i can see|i see (?:in|on) (?:the|your) (?:image|photo|picture|screenshot)|from (?:the|your) (?:image|photo|picture|screenshot)|in (?:the|your) (?:image|photo|picture|screenshot)|looking at (?:the|your)|(?:i(?:'ve| have)? )?(?:checked|reviewed|looked at|viewed|saw|seen|opened) (?:the|your) (?:image|photo|picture|screenshot|receipt|attachment))|(?:ছবিতে|স্ক্রিনশটে|ছবি দেখে|স্ক্রিনশট দেখে|দেখতে পাচ্ছি)|\b(?:chobi(?:te)?|screenshot(?:e)?|pic(?:e)?)\s*(?:e\s*)?(?:dekhchi|dekhlam|dekha jacche|dekhte pacchi)/i;
@@ -25,7 +31,7 @@ function isPlainObject(v) { return v !== null && typeof v === 'object' && !Array
 
 // Pull the first JSON object out of a model message. Accepts a bare object or
 // one wrapped in a ```json fence; anything else is a failure, not a guess.
-export function parseModelJson(content) {
+function parseModelJson(content) {
   if (isPlainObject(content)) return { ok: true, value: content };
   if (typeof content !== 'string') return { ok: false, error: 'no_content' };
   let s = content.trim();
@@ -54,7 +60,7 @@ export function parseModelJson(content) {
  * @param {any} [ctx]
  * @returns {{ ok: boolean, errors?: string[], value?: any }}
  */
-export function validateReply(raw, ctx) {
+function validateReply(raw, ctx) {
   const errors = [];
   const c = ctx || {};
   if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };
@@ -134,7 +140,7 @@ function cleanStrList(v, maxItems, maxLen) {
  * @param {any} raw
  * @returns {{ ok: boolean, errors?: string[], value?: any }}
  */
-export function validateVisionResult(raw) {
+function validateVisionResult(raw) {
   const errors = [];
   if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };
   if (!IMAGE_TYPES.includes(raw.image_type)) errors.push('invalid_image_type');
@@ -186,7 +192,7 @@ export function validateVisionResult(raw) {
 
 // Reduce OpenRouter's response metadata to what we store. Missing usage stays
 // null ("unavailable"), never 0.
-export function extractUsage(resp, model, latencyMs) {
+function extractUsage(resp, model, latencyMs) {
   const u = resp && resp.usage;
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   return {
@@ -200,3 +206,126 @@ export function extractUsage(resp, model, latencyMs) {
     cost_usd: u ? num(u.cost) : null,
   };
 }
+// ---- end shared/validate.js ----
+// ---- begin shared/redact.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
+// Redaction helpers. Dependency-free; inlined into n8n Code nodes.
+//
+// redactSecrets: applied to EVERYTHING before it reaches a model, a log line
+//   or shared knowledge: OTPs, passwords, card numbers, CVVs, API keys and
+//   login/token links.
+// redactPersonal: additionally applied before conversation text enters the
+//   daily-learning review: phones, emails, order numbers, transaction ids.
+
+function luhnValid(digits) {
+  let sum = 0;
+  let dbl = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48;
+    if (dbl) { d *= 2; if (d > 9) d -= 9; }
+    sum += d;
+    dbl = !dbl;
+  }
+  return sum % 10 === 0;
+}
+
+const BN_DIGITS = '০১২৩৪৫৬৭৮৯';
+function asciiDigits(s) {
+  return s.replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)));
+}
+
+function redactSecrets(input) {
+  if (input === null || input === undefined) return input;
+  let s = String(input);
+  const found = [];
+  const mark = (kind) => { if (!found.includes(kind)) found.push(kind); };
+
+  // Links that carry credentials or one-time tokens.
+  s = s.replace(/\bhttps?:\/\/[^\s<>"']+/gi, (url) => {
+    if (/[?&#](?:token|access_token|auth|key|api_key|apikey|sig|signature|code|otp|password|pass|session|magic|login|reset)=/i.test(url)
+        || /\/(?:reset-password|password-reset|magic-link|verify-email|login\/token|auth\/callback)\b/i.test(url)) {
+      mark('login_link');
+      return '[login link removed]';
+    }
+    return url;
+  });
+
+  // API keys and bearer tokens.
+  s = s.replace(/\b(?:sk|pk|rk|zrk|sk-or-v1|ghp|gho|xox[abpr])[-_][A-Za-z0-9_-]{16,}\b/g, () => { mark('api_key'); return '[secret removed]'; });
+  s = s.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, () => { mark('api_key'); return 'Bearer [secret removed]'; });
+  s = s.replace(/\b(?:ck|cs)_[a-f0-9]{30,}\b/gi, () => { mark('api_key'); return '[secret removed]'; });
+
+  // "password: xyz", "pass - xyz", "পাসওয়ার্ড: xyz", "pw xyz"
+  s = s.replace(/((?:password|passwd|pass|pwd|pw|pin|পাসওয়ার্ড|পাসওয়ার্ড|পিন)\s*(?:is|hocche|holo|হলো|হচ্ছে)?\s*[:=\-–]?\s*)(\S{3,})/gi, (m, p1) => {
+    mark('password');
+    return `${p1}[hidden]`;
+  });
+
+  // OTP / verification codes near a keyword (English, Bangla, Banglish).
+  s = s.replace(/((?:otp|o\.t\.p|verification code|verify code|security code|login code|auth code|code|কোড|ওটিপি|ভেরিফিকেশন কোড)\s*(?:is|holo|hocche|হলো|হচ্ছে)?\s*[:=\-–]?\s*)([0-9০-৯][0-9০-৯\s-]{2,9}[0-9০-৯])/gi, (m, p1, code) => {
+    const digits = asciiDigits(code).replace(/\D/g, '');
+    if (digits.length >= 4 && digits.length <= 8) { mark('otp'); return `${p1}[hidden]`; }
+    return m;
+  });
+
+  // Card numbers (13–19 digits, Luhn-valid) and CVV.
+  s = s.replace(/\b(?:\d[ -]?){12,18}\d\b/g, (m) => {
+    const digits = m.replace(/\D/g, '');
+    if (digits.length >= 13 && digits.length <= 19 && luhnValid(digits)) { mark('card_number'); return '[card number hidden]'; }
+    return m;
+  });
+  s = s.replace(/\b(cvv|cvc|cvv2|security number)\s*[:=\-]?\s*\d{3,4}\b/gi, (m, p1) => { mark('cvv'); return `${p1} [hidden]`; });
+
+  return found.length ? { text: s, redacted: found } : { text: s, redacted: [] };
+}
+
+function redactSecretsText(input) {
+  return redactSecrets(input).text;
+}
+
+function redactPersonal(input) {
+  let s = redactSecretsText(input);
+  if (s === null || s === undefined) return s;
+  s = s.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[EMAIL]');
+  s = s.replace(/(?:\+?88[\s-]?)?\b01[3-9](?:[\s-]?\d){8}\b/g, '[PHONE]');
+  s = s.replace(/(?:\+|\b00)\d(?:[\s-]?\d){8,14}\b/g, '[PHONE]');
+  s = s.replace(/[০-৯]{11}/g, '[PHONE]');
+  s = s.replace(/(?:order|অর্ডার|ordar)\s*(?:no\.?|number|nomber|#|নং|নম্বর)?\s*[:#]?\s*\d{3,}/gi, '[ORDER]');
+  s = s.replace(/#\d{3,}/g, '[ORDER]');
+  s = s.replace(/\b(?:trx|txn|transaction|trxid|txnid|ট্রানজেকশন)\s*(?:id|আইডি)?\s*[:#-]?\s*[A-Z0-9]{6,}\b/gi, '[TRANSACTION]');
+  s = s.replace(/\b[A-Z0-9]{10}\b/g, (m) => (/\d/.test(m) && /[A-Z]/.test(m) ? '[TRANSACTION]' : m));
+  return s;
+}
+// ---- end shared/redact.js ----
+
+const meta = $('Prepare Summary Request').first().json.meta;
+const resp = $input.first().json || {};
+const usage = extractUsage(resp, null, Date.now() - meta.started_at);
+usage.purpose = 'summary';
+const choice = resp.choices && resp.choices[0];
+const parsed = choice && choice.finish_reason !== 'length' ? parseModelJson(choice.message && choice.message.content) : { ok: false };
+const KEYS = ['preferred_language', 'preferred_payment_method', 'device', 'preferred_contact_time', 'preferred_name', 'operating_system'];
+function list(v, n, len) { return Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, n).map((x) => redactSecretsText(x).slice(0, len)) : []; }
+
+if (!parsed.ok || typeof parsed.value.summary !== 'string') {
+  usage.outcome = resp.error ? 'error' : 'invalid_output';
+  return [{ json: { ok: false, save: { usage: usage } } }];
+}
+usage.outcome = 'ok';
+const v = parsed.value;
+const memories = [];
+for (const p of (Array.isArray(v.preferences) ? v.preferences : []).slice(0, 6)) {
+  if (!p || KEYS.indexOf(p.key) < 0 || typeof p.value !== 'string') continue;
+  if (meta.customer_message_ids.indexOf(p.source_message_id) < 0) continue;
+  const red = redactSecrets(p.value);
+  if (red.redacted.length) continue;
+  memories.push({ key: p.key, value: p.value.trim().slice(0, 120), source_message_id: p.source_message_id });
+}
+return [{ json: { ok: true, save: {
+  conversation_id: meta.conversation_id,
+  summary: redactSecretsText(v.summary).slice(0, 600),
+  actions: list(v.actions_taken, 8, 200),
+  open: list(v.open_issues, 5, 200),
+  covers_until: meta.covers_until,
+  memories: memories,
+  usage: usage,
+} } }];

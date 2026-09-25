@@ -3,8 +3,153 @@
 // Output: one item { ready, state } where state carries everything later
 // nodes need. The model receives only redacted, scoped context for THIS
 // customer; customer text is marked as data, not instructions.
-// @include shared/redact.js
-// @include shared/escalation.js
+// ---- begin shared/redact.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
+// Redaction helpers. Dependency-free; inlined into n8n Code nodes.
+//
+// redactSecrets: applied to EVERYTHING before it reaches a model, a log line
+//   or shared knowledge: OTPs, passwords, card numbers, CVVs, API keys and
+//   login/token links.
+// redactPersonal: additionally applied before conversation text enters the
+//   daily-learning review: phones, emails, order numbers, transaction ids.
+
+function luhnValid(digits) {
+  let sum = 0;
+  let dbl = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48;
+    if (dbl) { d *= 2; if (d > 9) d -= 9; }
+    sum += d;
+    dbl = !dbl;
+  }
+  return sum % 10 === 0;
+}
+
+const BN_DIGITS = '০১২৩৪৫৬৭৮৯';
+function asciiDigits(s) {
+  return s.replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)));
+}
+
+function redactSecrets(input) {
+  if (input === null || input === undefined) return input;
+  let s = String(input);
+  const found = [];
+  const mark = (kind) => { if (!found.includes(kind)) found.push(kind); };
+
+  // Links that carry credentials or one-time tokens.
+  s = s.replace(/\bhttps?:\/\/[^\s<>"']+/gi, (url) => {
+    if (/[?&#](?:token|access_token|auth|key|api_key|apikey|sig|signature|code|otp|password|pass|session|magic|login|reset)=/i.test(url)
+        || /\/(?:reset-password|password-reset|magic-link|verify-email|login\/token|auth\/callback)\b/i.test(url)) {
+      mark('login_link');
+      return '[login link removed]';
+    }
+    return url;
+  });
+
+  // API keys and bearer tokens.
+  s = s.replace(/\b(?:sk|pk|rk|zrk|sk-or-v1|ghp|gho|xox[abpr])[-_][A-Za-z0-9_-]{16,}\b/g, () => { mark('api_key'); return '[secret removed]'; });
+  s = s.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, () => { mark('api_key'); return 'Bearer [secret removed]'; });
+  s = s.replace(/\b(?:ck|cs)_[a-f0-9]{30,}\b/gi, () => { mark('api_key'); return '[secret removed]'; });
+
+  // "password: xyz", "pass - xyz", "পাসওয়ার্ড: xyz", "pw xyz"
+  s = s.replace(/((?:password|passwd|pass|pwd|pw|pin|পাসওয়ার্ড|পাসওয়ার্ড|পিন)\s*(?:is|hocche|holo|হলো|হচ্ছে)?\s*[:=\-–]?\s*)(\S{3,})/gi, (m, p1) => {
+    mark('password');
+    return `${p1}[hidden]`;
+  });
+
+  // OTP / verification codes near a keyword (English, Bangla, Banglish).
+  s = s.replace(/((?:otp|o\.t\.p|verification code|verify code|security code|login code|auth code|code|কোড|ওটিপি|ভেরিফিকেশন কোড)\s*(?:is|holo|hocche|হলো|হচ্ছে)?\s*[:=\-–]?\s*)([0-9০-৯][0-9০-৯\s-]{2,9}[0-9০-৯])/gi, (m, p1, code) => {
+    const digits = asciiDigits(code).replace(/\D/g, '');
+    if (digits.length >= 4 && digits.length <= 8) { mark('otp'); return `${p1}[hidden]`; }
+    return m;
+  });
+
+  // Card numbers (13–19 digits, Luhn-valid) and CVV.
+  s = s.replace(/\b(?:\d[ -]?){12,18}\d\b/g, (m) => {
+    const digits = m.replace(/\D/g, '');
+    if (digits.length >= 13 && digits.length <= 19 && luhnValid(digits)) { mark('card_number'); return '[card number hidden]'; }
+    return m;
+  });
+  s = s.replace(/\b(cvv|cvc|cvv2|security number)\s*[:=\-]?\s*\d{3,4}\b/gi, (m, p1) => { mark('cvv'); return `${p1} [hidden]`; });
+
+  return found.length ? { text: s, redacted: found } : { text: s, redacted: [] };
+}
+
+function redactSecretsText(input) {
+  return redactSecrets(input).text;
+}
+
+function redactPersonal(input) {
+  let s = redactSecretsText(input);
+  if (s === null || s === undefined) return s;
+  s = s.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[EMAIL]');
+  s = s.replace(/(?:\+?88[\s-]?)?\b01[3-9](?:[\s-]?\d){8}\b/g, '[PHONE]');
+  s = s.replace(/(?:\+|\b00)\d(?:[\s-]?\d){8,14}\b/g, '[PHONE]');
+  s = s.replace(/[০-৯]{11}/g, '[PHONE]');
+  s = s.replace(/(?:order|অর্ডার|ordar)\s*(?:no\.?|number|nomber|#|নং|নম্বর)?\s*[:#]?\s*\d{3,}/gi, '[ORDER]');
+  s = s.replace(/#\d{3,}/g, '[ORDER]');
+  s = s.replace(/\b(?:trx|txn|transaction|trxid|txnid|ট্রানজেকশন)\s*(?:id|আইডি)?\s*[:#-]?\s*[A-Z0-9]{6,}\b/gi, '[TRANSACTION]');
+  s = s.replace(/\b[A-Z0-9]{10}\b/g, (m) => (/\d/.test(m) && /[A-Z]/.test(m) ? '[TRANSACTION]' : m));
+  return s;
+}
+// ---- end shared/redact.js ----
+// ---- begin shared/escalation.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
+// Configurable escalation rules. Dependency-free; inlined into n8n Code nodes.
+// Inputs are trusted values from the database (rules, counters) plus the
+// validated classifier/model intents for this turn. The model never decides
+// whether a rule is enabled.
+
+/**
+ * @param {{ rules: any, intents?: string[], decision?: string, handoffReason?: string | null, state?: any, handoffPhrase?: string | null }} input
+ * @returns {{ handoff: boolean, reason: string | null, suppressed?: string }}
+ */
+function evaluateEscalation({ rules, intents, decision, handoffReason, state, handoffPhrase }) {
+  const r = rules || {};
+  const on = (k) => Boolean(r[k] && r[k].enabled);
+  const has = (i) => Array.isArray(intents) && intents.includes(i);
+  const st = state || {};
+
+  if (on('customer_requests_human') && (handoffPhrase === 'explicit' || has('human_request'))) {
+    return { handoff: true, reason: 'customer_requested_human' };
+  }
+  if (on('refund_request') && (has('refund_request') || has('cancellation'))) {
+    return { handoff: true, reason: 'refund_request' };
+  }
+  if (on('unresolved_complaint') && has('complaint')
+      && (st.complaint_turns_24h || 0) + 1 >= ((r.unresolved_complaint && r.unresolved_complaint.complaint_turns) || 2)) {
+    return { handoff: true, reason: 'unresolved_complaint' };
+  }
+  if (on('repeated_failed_answers')
+      && (st.ai_unresolved_turns_24h || 0) >= ((r.repeated_failed_answers && r.repeated_failed_answers.unresolved_turns) || 2)) {
+    return { handoff: true, reason: 'repeated_failed_answers' };
+  }
+  if (on('purchase_intent') && has('purchase_intent')) {
+    return { handoff: true, reason: 'purchase_intent' };
+  }
+  if (decision === 'handoff') {
+    // The model asked for a person. Honour it, except that an
+    // "unavailable information" handoff can be switched off by the owner, in
+    // which case the reply workflow asks the model for a holding answer.
+    if (handoffReason === 'unavailable_information' && !on('unavailable_information')) {
+      return { handoff: false, reason: null, suppressed: 'unavailable_information' };
+    }
+    return { handoff: true, reason: handoffReason || 'other' };
+  }
+  return { handoff: false, reason: null };
+}
+
+// Business hours check in the shop's timezone. hours.days: { mon: ['10:00','22:00'], ... }
+function isWithinBusinessHours(hours, now) {
+  if (!hours || !hours.days) return true;
+  const d = now || new Date();
+  const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: hours.timezone || 'UTC', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const parts = Object.fromEntries(fmt.formatToParts(d).map((p) => [p.type, p.value]));
+  const day = String(parts.weekday || '').toLowerCase().slice(0, 3);
+  const span = hours.days[day];
+  if (!span) return false;
+  const cur = `${parts.hour}:${parts.minute}`;
+  return cur >= span[0] && cur < span[1];
+}
+// ---- end shared/escalation.js ----
 
 const input = $input.first().json;
 const d = input.d || null;

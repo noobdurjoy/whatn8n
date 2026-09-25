@@ -1,19 +1,25 @@
+// WA · B AI Reply — "Validate & Decide"
+// Server-side validation of the final model output, plus the owner's
+// escalation rules. The model never decides permissions: an invalid output
+// gets ONE repair attempt; if it is still invalid the job hands off (AUTO)
+// or fails (drafts), and nothing unvalidated is ever sent.
+// ---- begin shared/validate.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Server-side validation of model output. Dependency-free; inlined into n8n
 // Code nodes and imported by the backend and tests. JSON from a model is never
 // trusted to match its schema: everything is checked here before use.
 
-export const REPLY_DECISIONS = ['reply', 'handoff', 'no_reply'];
-export const HANDOFF_REASONS = [
+const REPLY_DECISIONS = ['reply', 'handoff', 'no_reply'];
+const HANDOFF_REASONS = [
   'customer_requested_human', 'unresolved_complaint', 'repeated_failed_answers', 'refund_request',
   'unavailable_information', 'purchase_intent', 'order_change_request', 'payment_verification',
   'unsupported_media', 'sensitive_request', 'other',
 ];
-export const INTENTS = [
+const INTENTS = [
   'greeting', 'product_question', 'price_question', 'purchase_intent', 'order_status', 'payment_issue',
   'refund_request', 'cancellation', 'delivery_issue', 'renewal', 'access_issue', 'complaint',
   'human_request', 'image_question', 'thanks', 'other',
 ];
-export const LANGS = ['bn', 'en', 'banglish'];
+const LANGS = ['bn', 'en', 'banglish'];
 
 const INTERNAL_LEAK_RE = /<\/?think>|\bchain[- ]of[- ]thought\b|\bsystem prompt\b|\bmy instructions\b|\bas an ai language model\b|\btool_call\b|\bfunction call\b|"decision"\s*:/i;
 const VIEWED_IMAGE_RE = /\b(?:i can see|i see (?:in|on) (?:the|your) (?:image|photo|picture|screenshot)|from (?:the|your) (?:image|photo|picture|screenshot)|in (?:the|your) (?:image|photo|picture|screenshot)|looking at (?:the|your)|(?:i(?:'ve| have)? )?(?:checked|reviewed|looked at|viewed|saw|seen|opened) (?:the|your) (?:image|photo|picture|screenshot|receipt|attachment))|(?:ছবিতে|স্ক্রিনশটে|ছবি দেখে|স্ক্রিনশট দেখে|দেখতে পাচ্ছি)|\b(?:chobi(?:te)?|screenshot(?:e)?|pic(?:e)?)\s*(?:e\s*)?(?:dekhchi|dekhlam|dekha jacche|dekhte pacchi)/i;
@@ -25,7 +31,7 @@ function isPlainObject(v) { return v !== null && typeof v === 'object' && !Array
 
 // Pull the first JSON object out of a model message. Accepts a bare object or
 // one wrapped in a ```json fence; anything else is a failure, not a guess.
-export function parseModelJson(content) {
+function parseModelJson(content) {
   if (isPlainObject(content)) return { ok: true, value: content };
   if (typeof content !== 'string') return { ok: false, error: 'no_content' };
   let s = content.trim();
@@ -54,7 +60,7 @@ export function parseModelJson(content) {
  * @param {any} [ctx]
  * @returns {{ ok: boolean, errors?: string[], value?: any }}
  */
-export function validateReply(raw, ctx) {
+function validateReply(raw, ctx) {
   const errors = [];
   const c = ctx || {};
   if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };
@@ -134,7 +140,7 @@ function cleanStrList(v, maxItems, maxLen) {
  * @param {any} raw
  * @returns {{ ok: boolean, errors?: string[], value?: any }}
  */
-export function validateVisionResult(raw) {
+function validateVisionResult(raw) {
   const errors = [];
   if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };
   if (!IMAGE_TYPES.includes(raw.image_type)) errors.push('invalid_image_type');
@@ -186,7 +192,7 @@ export function validateVisionResult(raw) {
 
 // Reduce OpenRouter's response metadata to what we store. Missing usage stays
 // null ("unavailable"), never 0.
-export function extractUsage(resp, model, latencyMs) {
+function extractUsage(resp, model, latencyMs) {
   const u = resp && resp.usage;
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   return {
@@ -200,3 +206,139 @@ export function extractUsage(resp, model, latencyMs) {
     cost_usd: u ? num(u.cost) : null,
   };
 }
+// ---- end shared/validate.js ----
+// ---- begin shared/escalation.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
+// Configurable escalation rules. Dependency-free; inlined into n8n Code nodes.
+// Inputs are trusted values from the database (rules, counters) plus the
+// validated classifier/model intents for this turn. The model never decides
+// whether a rule is enabled.
+
+/**
+ * @param {{ rules: any, intents?: string[], decision?: string, handoffReason?: string | null, state?: any, handoffPhrase?: string | null }} input
+ * @returns {{ handoff: boolean, reason: string | null, suppressed?: string }}
+ */
+function evaluateEscalation({ rules, intents, decision, handoffReason, state, handoffPhrase }) {
+  const r = rules || {};
+  const on = (k) => Boolean(r[k] && r[k].enabled);
+  const has = (i) => Array.isArray(intents) && intents.includes(i);
+  const st = state || {};
+
+  if (on('customer_requests_human') && (handoffPhrase === 'explicit' || has('human_request'))) {
+    return { handoff: true, reason: 'customer_requested_human' };
+  }
+  if (on('refund_request') && (has('refund_request') || has('cancellation'))) {
+    return { handoff: true, reason: 'refund_request' };
+  }
+  if (on('unresolved_complaint') && has('complaint')
+      && (st.complaint_turns_24h || 0) + 1 >= ((r.unresolved_complaint && r.unresolved_complaint.complaint_turns) || 2)) {
+    return { handoff: true, reason: 'unresolved_complaint' };
+  }
+  if (on('repeated_failed_answers')
+      && (st.ai_unresolved_turns_24h || 0) >= ((r.repeated_failed_answers && r.repeated_failed_answers.unresolved_turns) || 2)) {
+    return { handoff: true, reason: 'repeated_failed_answers' };
+  }
+  if (on('purchase_intent') && has('purchase_intent')) {
+    return { handoff: true, reason: 'purchase_intent' };
+  }
+  if (decision === 'handoff') {
+    // The model asked for a person. Honour it, except that an
+    // "unavailable information" handoff can be switched off by the owner, in
+    // which case the reply workflow asks the model for a holding answer.
+    if (handoffReason === 'unavailable_information' && !on('unavailable_information')) {
+      return { handoff: false, reason: null, suppressed: 'unavailable_information' };
+    }
+    return { handoff: true, reason: handoffReason || 'other' };
+  }
+  return { handoff: false, reason: null };
+}
+
+// Business hours check in the shop's timezone. hours.days: { mon: ['10:00','22:00'], ... }
+function isWithinBusinessHours(hours, now) {
+  if (!hours || !hours.days) return true;
+  const d = now || new Date();
+  const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: hours.timezone || 'UTC', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const parts = Object.fromEntries(fmt.formatToParts(d).map((p) => [p.type, p.value]));
+  const day = String(parts.weekday || '').toLowerCase().slice(0, 3);
+  const span = hours.days[day];
+  if (!span) return false;
+  const cur = `${parts.hour}:${parts.minute}`;
+  return cur >= span[0] && cur < span[1];
+}
+// ---- end shared/escalation.js ----
+
+const state = JSON.parse(JSON.stringify($input.first().json.state));
+const staffAssist = state.kind !== 'reply';
+const ctx = {
+  mode: state.mode,
+  staff_assist: staffAssist,
+  tool_refs: state.refs.tool,
+  knowledge_refs: state.refs.knowledge,
+  image_refs: state.refs.image,
+  price_tool_used: state.price_tool_used,
+  verified_paid_order: state.verified_paid_order,
+  allowed_urls: state.allowed_urls,
+  customer_language: state.customer_language,
+};
+
+let parsed = state.failed ? { ok: false, error: state.failure } : parseModelJson(state.final_content);
+let v = parsed.ok ? validateReply(parsed.value, ctx) : { ok: false, errors: [parsed.error || 'no_output'] };
+
+if (!v.ok && !state.failed && !state.repaired) {
+  // One repair attempt with the validator's findings.
+  state.repaired = true;
+  state.validation_errors_first = v.errors;
+  return [{ json: { next: 'repair', state: state } }];
+}
+
+let decision;
+let text = '';
+let reason = null;
+let intents = [];
+let resolved = null;
+let references = [];
+if (v.ok) {
+  decision = v.value.decision;
+  text = v.value.reply_text;
+  reason = v.value.handoff_reason;
+  intents = v.value.intents;
+  resolved = v.value.resolved;
+  references = v.value.references;
+  const esc = evaluateEscalation({ rules: state.escalation.rules, intents: intents, decision: decision, handoffReason: reason, state: state.escalation.state, handoffPhrase: state.escalation.handoff_phrase });
+  if (esc.handoff && !staffAssist) {
+    decision = 'handoff';
+    reason = esc.reason;
+  } else if (esc.suppressed && decision === 'handoff') {
+    // Owner disabled this handoff type: fall back to a holding reply if the
+    // model wrote one, otherwise hand off anyway (never leave it unanswered).
+    decision = text ? 'reply' : 'handoff';
+  }
+} else {
+  // Still invalid after repair (or the model call failed).
+  decision = staffAssist || state.mode !== 'AUTO' ? 'fail' : 'handoff';
+  reason = 'other';
+}
+
+return [{ json: {
+  next: decision === 'fail' ? 'fail' : 'submit',
+  job_id: state.job_id,
+  conversation_id: state.conversation_id,
+  submit: {
+    job_id: state.job_id,
+    decision: decision === 'fail' ? 'no_reply' : decision,
+    reply_text: text,
+    handoff_reason: reason,
+    references: references,
+    result: {
+      intents: intents,
+      resolved: resolved,
+      language: state.customer_language,
+      validation_errors: v.ok ? (state.validation_errors_first || null) : v.errors,
+      repaired: state.repaired,
+      rounds: state.final_round || null,
+      tools_used: state.refs,
+      images_analysed: state.images_analysed || 0,
+    },
+  },
+  failure: decision === 'fail' ? ('invalid_output: ' + (v.errors || []).join(',')).slice(0, 400) : null,
+  usage: state.usage,
+} }];

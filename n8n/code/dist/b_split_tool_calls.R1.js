@@ -1,5 +1,4 @@
-// @variants R1,R2
-// WA · B AI Reply — "__VARIANT__ Split Tool Calls"
+// WA · B AI Reply — "R1 Split Tool Calls"
 // One item per tool call for the Tool Runner sub-workflow. The allowlist and
 // argument checks happen again inside the Tool Runner; here we only cap the
 // number of image analyses per turn (settings.vision.max_images_per_turn).

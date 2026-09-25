@@ -1,19 +1,25 @@
+// WA · B AI Reply — "R4 Parse Response"
+// Input: the OpenRouter response for this round. Reads the state that built
+// the request from the node that ran just before the model call, records
+// usage (missing usage stays null = unavailable), and decides: run tools,
+// or go to validation. Streaming is not used: the whole response is buffered.
+// ---- begin shared/validate.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Server-side validation of model output. Dependency-free; inlined into n8n
 // Code nodes and imported by the backend and tests. JSON from a model is never
 // trusted to match its schema: everything is checked here before use.
 
-export const REPLY_DECISIONS = ['reply', 'handoff', 'no_reply'];
-export const HANDOFF_REASONS = [
+const REPLY_DECISIONS = ['reply', 'handoff', 'no_reply'];
+const HANDOFF_REASONS = [
   'customer_requested_human', 'unresolved_complaint', 'repeated_failed_answers', 'refund_request',
   'unavailable_information', 'purchase_intent', 'order_change_request', 'payment_verification',
   'unsupported_media', 'sensitive_request', 'other',
 ];
-export const INTENTS = [
+const INTENTS = [
   'greeting', 'product_question', 'price_question', 'purchase_intent', 'order_status', 'payment_issue',
   'refund_request', 'cancellation', 'delivery_issue', 'renewal', 'access_issue', 'complaint',
   'human_request', 'image_question', 'thanks', 'other',
 ];
-export const LANGS = ['bn', 'en', 'banglish'];
+const LANGS = ['bn', 'en', 'banglish'];
 
 const INTERNAL_LEAK_RE = /<\/?think>|\bchain[- ]of[- ]thought\b|\bsystem prompt\b|\bmy instructions\b|\bas an ai language model\b|\btool_call\b|\bfunction call\b|"decision"\s*:/i;
 const VIEWED_IMAGE_RE = /\b(?:i can see|i see (?:in|on) (?:the|your) (?:image|photo|picture|screenshot)|from (?:the|your) (?:image|photo|picture|screenshot)|in (?:the|your) (?:image|photo|picture|screenshot)|looking at (?:the|your)|(?:i(?:'ve| have)? )?(?:checked|reviewed|looked at|viewed|saw|seen|opened) (?:the|your) (?:image|photo|picture|screenshot|receipt|attachment))|(?:ছবিতে|স্ক্রিনশটে|ছবি দেখে|স্ক্রিনশট দেখে|দেখতে পাচ্ছি)|\b(?:chobi(?:te)?|screenshot(?:e)?|pic(?:e)?)\s*(?:e\s*)?(?:dekhchi|dekhlam|dekha jacche|dekhte pacchi)/i;
@@ -25,7 +31,7 @@ function isPlainObject(v) { return v !== null && typeof v === 'object' && !Array
 
 // Pull the first JSON object out of a model message. Accepts a bare object or
 // one wrapped in a ```json fence; anything else is a failure, not a guess.
-export function parseModelJson(content) {
+function parseModelJson(content) {
   if (isPlainObject(content)) return { ok: true, value: content };
   if (typeof content !== 'string') return { ok: false, error: 'no_content' };
   let s = content.trim();
@@ -54,7 +60,7 @@ export function parseModelJson(content) {
  * @param {any} [ctx]
  * @returns {{ ok: boolean, errors?: string[], value?: any }}
  */
-export function validateReply(raw, ctx) {
+function validateReply(raw, ctx) {
   const errors = [];
   const c = ctx || {};
   if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };
@@ -134,7 +140,7 @@ function cleanStrList(v, maxItems, maxLen) {
  * @param {any} raw
  * @returns {{ ok: boolean, errors?: string[], value?: any }}
  */
-export function validateVisionResult(raw) {
+function validateVisionResult(raw) {
   const errors = [];
   if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };
   if (!IMAGE_TYPES.includes(raw.image_type)) errors.push('invalid_image_type');
@@ -186,7 +192,7 @@ export function validateVisionResult(raw) {
 
 // Reduce OpenRouter's response metadata to what we store. Missing usage stays
 // null ("unavailable"), never 0.
-export function extractUsage(resp, model, latencyMs) {
+function extractUsage(resp, model, latencyMs) {
   const u = resp && resp.usage;
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   return {
@@ -200,3 +206,40 @@ export function extractUsage(resp, model, latencyMs) {
     cost_usd: u ? num(u.cost) : null,
   };
 }
+// ---- end shared/validate.js ----
+
+const ROUND = 'R4';
+const PREV = { R1: 'Prepare Turn', R2: 'R1 Collect Tool Results', R3: 'R2 Collect Tool Results', R4: 'Build Repair Request' }[ROUND];
+const state = JSON.parse(JSON.stringify($(PREV).first().json.state));
+const resp = $input.first().json || {};
+const latency = Date.now() - (state.request_started_at || Date.now());
+
+const httpError = resp.error ? (typeof resp.error === 'object' ? (resp.error.message || JSON.stringify(resp.error)) : String(resp.error)) : null;
+const usage = extractUsage(resp, state.model, latency);
+usage.purpose = state.sandbox ? 'sandbox' : (ROUND === 'R4' ? 'reply_repair' : 'reply');
+usage.outcome = httpError ? 'error' : 'ok';
+if (httpError) usage.error = httpError.slice(0, 500);
+state.usage.push(usage);
+
+const choice = resp.choices && resp.choices[0];
+if (httpError || !choice) {
+  state.failed = true;
+  state.failure = httpError || 'no_choices';
+  return [{ json: { next: 'fail', state: state } }];
+}
+if (choice.finish_reason === 'length') {
+  // Truncated output is discarded, never used partially.
+  state.usage[state.usage.length - 1].outcome = 'incomplete';
+}
+
+const msg = choice.message || {};
+const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+if (calls.length && (ROUND === 'R1' || ROUND === 'R2')) {
+  state.messages.push({ role: 'assistant', content: msg.content || null, tool_calls: calls });
+  state.pending_calls = calls.slice(0, 6).map((c) => ({ id: c.id, name: c.function && c.function.name, arguments: (c.function && c.function.arguments) || '{}' }));
+  state.round = ROUND === 'R1' ? 2 : 3;
+  return [{ json: { next: 'tools', state: state } }];
+}
+state.final_content = choice.finish_reason === 'length' ? null : (msg.content || null);
+state.final_round = ROUND;
+return [{ json: { next: 'validate', state: state } }];

@@ -1,19 +1,25 @@
+// WA · B2 Image Analysis — "Validate Vision Result"
+// Input: the buffered OpenRouter response (streaming is not used; a partial
+// or truncated result is discarded). The observations are validated on the
+// server; anything malformed becomes a failed analysis, never a guess.
+// Usage fields that the provider did not return stay null (unavailable).
+// ---- begin shared/validate.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Server-side validation of model output. Dependency-free; inlined into n8n
 // Code nodes and imported by the backend and tests. JSON from a model is never
 // trusted to match its schema: everything is checked here before use.
 
-export const REPLY_DECISIONS = ['reply', 'handoff', 'no_reply'];
-export const HANDOFF_REASONS = [
+const REPLY_DECISIONS = ['reply', 'handoff', 'no_reply'];
+const HANDOFF_REASONS = [
   'customer_requested_human', 'unresolved_complaint', 'repeated_failed_answers', 'refund_request',
   'unavailable_information', 'purchase_intent', 'order_change_request', 'payment_verification',
   'unsupported_media', 'sensitive_request', 'other',
 ];
-export const INTENTS = [
+const INTENTS = [
   'greeting', 'product_question', 'price_question', 'purchase_intent', 'order_status', 'payment_issue',
   'refund_request', 'cancellation', 'delivery_issue', 'renewal', 'access_issue', 'complaint',
   'human_request', 'image_question', 'thanks', 'other',
 ];
-export const LANGS = ['bn', 'en', 'banglish'];
+const LANGS = ['bn', 'en', 'banglish'];
 
 const INTERNAL_LEAK_RE = /<\/?think>|\bchain[- ]of[- ]thought\b|\bsystem prompt\b|\bmy instructions\b|\bas an ai language model\b|\btool_call\b|\bfunction call\b|"decision"\s*:/i;
 const VIEWED_IMAGE_RE = /\b(?:i can see|i see (?:in|on) (?:the|your) (?:image|photo|picture|screenshot)|from (?:the|your) (?:image|photo|picture|screenshot)|in (?:the|your) (?:image|photo|picture|screenshot)|looking at (?:the|your)|(?:i(?:'ve| have)? )?(?:checked|reviewed|looked at|viewed|saw|seen|opened) (?:the|your) (?:image|photo|picture|screenshot|receipt|attachment))|(?:ছবিতে|স্ক্রিনশটে|ছবি দেখে|স্ক্রিনশট দেখে|দেখতে পাচ্ছি)|\b(?:chobi(?:te)?|screenshot(?:e)?|pic(?:e)?)\s*(?:e\s*)?(?:dekhchi|dekhlam|dekha jacche|dekhte pacchi)/i;
@@ -25,7 +31,7 @@ function isPlainObject(v) { return v !== null && typeof v === 'object' && !Array
 
 // Pull the first JSON object out of a model message. Accepts a bare object or
 // one wrapped in a ```json fence; anything else is a failure, not a guess.
-export function parseModelJson(content) {
+function parseModelJson(content) {
   if (isPlainObject(content)) return { ok: true, value: content };
   if (typeof content !== 'string') return { ok: false, error: 'no_content' };
   let s = content.trim();
@@ -54,7 +60,7 @@ export function parseModelJson(content) {
  * @param {any} [ctx]
  * @returns {{ ok: boolean, errors?: string[], value?: any }}
  */
-export function validateReply(raw, ctx) {
+function validateReply(raw, ctx) {
   const errors = [];
   const c = ctx || {};
   if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };
@@ -134,7 +140,7 @@ function cleanStrList(v, maxItems, maxLen) {
  * @param {any} raw
  * @returns {{ ok: boolean, errors?: string[], value?: any }}
  */
-export function validateVisionResult(raw) {
+function validateVisionResult(raw) {
   const errors = [];
   if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };
   if (!IMAGE_TYPES.includes(raw.image_type)) errors.push('invalid_image_type');
@@ -186,7 +192,7 @@ export function validateVisionResult(raw) {
 
 // Reduce OpenRouter's response metadata to what we store. Missing usage stays
 // null ("unavailable"), never 0.
-export function extractUsage(resp, model, latencyMs) {
+function extractUsage(resp, model, latencyMs) {
   const u = resp && resp.usage;
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   return {
@@ -200,3 +206,39 @@ export function extractUsage(resp, model, latencyMs) {
     cost_usd: u ? num(u.cost) : null,
   };
 }
+// ---- end shared/validate.js ----
+
+const prep = $('Prepare Vision Request').first().json;
+const meta = prep.meta;
+const resp = $input.first().json || {};
+const usage = extractUsage(resp, meta.model, Date.now() - meta.started_at);
+usage.purpose = 'vision';
+
+const httpError = resp.error ? (typeof resp.error === 'object' ? (resp.error.message || JSON.stringify(resp.error)) : String(resp.error)) : null;
+const choice = resp.choices && resp.choices[0];
+let status = 'failed';
+let result = null;
+let error = null;
+
+if (httpError || !choice) {
+  error = 'model_error: ' + String(httpError || 'no_choices').slice(0, 300);
+} else if (choice.finish_reason === 'length') {
+  error = 'incomplete_output';
+} else {
+  const parsed = parseModelJson(choice.message && choice.message.content);
+  if (!parsed.ok) {
+    status = 'invalid_output';
+    error = 'invalid_json';
+  } else {
+    const v = validateVisionResult(parsed.value);
+    if (!v.ok) { status = 'invalid_output'; error = 'invalid_observations: ' + v.errors.join(','); }
+    else if (!v.value.readable) { status = 'unreadable'; result = v.value; error = 'image_unreadable'; }
+    else { status = 'ok'; result = v.value; }
+  }
+}
+usage.outcome = status === 'ok' || status === 'unreadable' ? 'ok'
+  : status === 'invalid_output' ? 'invalid_output'
+  : error === 'incomplete_output' ? 'incomplete' : 'error';
+if (error) usage.error = error.slice(0, 500);
+
+return [{ json: { status: status, result: result, error: error, usage: usage, meta: meta } }];
