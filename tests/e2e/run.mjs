@@ -210,7 +210,7 @@ await scenario('image_sent_to_vision_model_and_used', async () => {
   const vis = (await e.mock('/_log')).log.filter((l) => l.kind === 'vision_image');
   assert(att.fetch_status === 'stored', 'attachment stored', att);
   assert(vis.length >= 1 && vis[vis.length - 1].data_url_prefix.startsWith('data:image/png;base64'), 'vision got a base64 data URL', vis);
-  assert(an && an.status === 'ok' && an.model === 'qwen/qwen3.7-flash', 'analysis stored with Qwen', an);
+  assert(an && an.status === 'ok' && an.model === 'stealth/space-bunny-alpha', 'analysis stored with the vision model', an);
   assert(/403/.test(s[0].body.message), 'reply uses the observation', s[0].body);
   return { attachment: att, analysis: an, vision_request: vis[vis.length - 1], reply: s[0].body.message };
 });

@@ -56,9 +56,9 @@ const request = {
     ] },
   ],
   response_format: { type: 'json_object' },
-  // Qwen reasons before answering and its provider ignores "effort": live
-  // checks got "{}" or no answer at all. A hard reasoning budget leaves room
-  // for the JSON answer (3 of 3 live checks passed with 256).
+  // A hard reasoning budget always leaves room for the JSON answer. (The
+  // earlier model, Qwen, ignored "effort" and answered "{}" or nothing; the
+  // current model passed the live check with these exact settings.)
   reasoning: { max_tokens: 256, exclude: true },
   max_tokens: models.vision_max_tokens || 1200,
   temperature: 0.1,

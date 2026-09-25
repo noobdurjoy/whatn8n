@@ -287,7 +287,7 @@ function sections() {
   // 5 -------------------------------------------------------------------------
   S.push({
     key: 'vision', color: 7,
-    title: '5 · Image analysis (Qwen qwen/qwen3.7-flash)',
+    title: '5 · Image analysis (stealth/space-bunny-alpha)',
     note: 'The customer\'s actual attachment is read from PostgreSQL and sent with the customer\'s question as a base64 data URL (no provider URL, filename or credential in the prompt). The result is validated JSON observations only — the vision model never sends messages or changes orders, and a payment screenshot is never proof of payment. Stale jobs are not called; same image + model + prompt is reused. Not run in HUMAN mode unless staff asked for assistance.',
     nodes: [
       noop('Image Request'),
@@ -618,7 +618,7 @@ function sections() {
   S.push({
     key: 'check', color: 1,
     title: '15 · Connection check (manual, read-only)',
-    note: 'Run it after changing any credential. Calls DeepSeek with the product-search tool, sends a **real shop product image** to Qwen, reads the Store API, lists Zernio accounts, checks the restricted PostgreSQL role, the backend health endpoint and token, and the WooCommerce REST key. Sends nothing to WhatsApp and changes nothing. The last node summarizes the results (no keys, no image bytes).',
+    note: 'Run it after changing any credential. Calls DeepSeek with the product-search tool, sends a **real shop product image** to the vision model, reads the Store API, lists Zernio accounts, checks the restricted PostgreSQL role, the backend health endpoint and token, and the WooCommerce REST key. Sends nothing to WhatsApp and changes nothing. The last node summarizes the results (no keys, no image bytes).',
     nodes: [
       manual('Run Connection Check'),
       code('Connection Check Plan', 'cc_start.js'),

@@ -11,7 +11,7 @@ flowchart LR
   BE -- event / job / outbound ids<br/>X-Internal-Token --> WF[n8n: ONE workflow<br/>Infinity Digital Shop — WhatsApp AI Support]
   WF -- restricted role wa_n8n<br/>granted functions only --> DB
   WF -- send / media / history --> Z
-  WF -- DeepSeek chat + Qwen vision --> OR[OpenRouter]
+  WF -- DeepSeek chat + stealth/space-bunny-alpha vision --> OR[OpenRouter]
   WF -- Store API + REST read (IDS WooCommerce Read) --> WOO
   WF -- stock fields only (IDS WooCommerce Stock) --> WOO
   WF -- event sweep, history import --> BE
@@ -55,7 +55,7 @@ The workflow is generated from `n8n/workflow.mjs`. Code nodes come from `n8n/cod
 | 2 | Customer media download | from 1 or 12 | Zernio's authenticated media endpoint only (`https://zernio.com/api/v1/…`, checked strictly). Type and size are checked; all results are stored in one database call |
 | 3 | AI reply (DeepSeek) | from 1; webhook `wa-ai-job` for staff assist / sandbox | Burst debounce, `start_ai_job`, scoped redacted context, up to 3 model rounds plus 1 repair, server-side validation, `submit_ai_result` |
 | 4 | AI tool calls | loops from 3 | One tool call per loop iteration. Arguments are re-validated. *Tool Return* sends each result back to its round |
-| 5 | Image analysis (Qwen) | from 4 | The customer's stored attachment is sent as a base64 data URL with the question. Output is validated JSON observations; stale jobs are skipped; results are reused for the same image, model and prompt |
+| 5 | Image analysis (vision model) | from 4 | The customer's stored attachment is sent as a base64 data URL with the question. Output is validated JSON observations; stale jobs are skipped; results are reused for the same image, model and prompt |
 | 6 | WooCommerce tools | from 4 | Store API search, details and variations; hosted-checkout links; order status **only for a verified owner**; staff-handled order requests |
 | 7 | Outgoing dispatch | webhook `wa-dispatch`, every 15 s, and from 1, 3, 9, 12 | **The only sending path.** A queue and a loop; `claim_outbound` re-checks every control right before each send; Idempotency-Key; unknown outcomes are recorded, never retried blindly |
 | 8 | Notifications | database outbox, every 1 min; 21:00 daily summary | Business events (new chats, handoffs, delivery failures, orders, stock, knowledge, expiring notices, API/connection/spending/deployment/backup problems, status of Telegram replies) become rows in `app.admin_notifications`. Each category is immediate, summary or disabled; rows are deduplicated, rate-limited and sent only to paired admins; a failed Telegram send is retried at most 3 times and never repeats the action behind it |

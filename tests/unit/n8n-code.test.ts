@@ -45,7 +45,7 @@ describe('B2 image analysis', () => {
   const call = { job_id: 'j1', customer_language: 'bn', args: { attachment_id: 'a1', question: 'What error is shown?' } };
   const base = {
     cur: { current: true }, vision: { enabled: true, max_image_bytes: 5 * 1024 * 1024, allowed_mime_types: ['image/png'], prompt_version: 'vision-v1' },
-    models: { vision_model: 'qwen/qwen3.7-flash', vision_max_tokens: 1200 }, prompt: 'SYSTEM', budget: { within_budget: true },
+    models: { vision_model: 'stealth/space-bunny-alpha', vision_max_tokens: 1200 }, prompt: 'SYSTEM', budget: { within_budget: true },
     reuse: null, att: { mime_type: 'image/png', size_bytes: 10, sha256_hex: 'ab', data_base64: 'iVBORw0KGgo=' },
   };
   it('builds text-then-image request with a data URL (no provider URL)', async () => {
@@ -56,7 +56,7 @@ describe('B2 image analysis', () => {
     expect(content[1]).toEqual({ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } });
     expect(JSON.stringify(o.json.request)).not.toMatch(/zernio\.com/);
     expect(o.json.request.response_format).toEqual({ type: 'json_object' });
-    // Live checks: with only effort 'low', Qwen spent the whole budget reasoning and answered "{}".
+    // A hard reasoning budget keeps room for the answer (effort alone was ignored by an earlier model).
     expect(o.json.request.reasoning).toEqual({ max_tokens: 256, exclude: true });
     expect(o.json.request.max_tokens).toBe(1200);
   });
@@ -73,7 +73,7 @@ describe('B2 image analysis', () => {
     expect((await run('v_prepare.js', { ...base, att: { ...base.att, size_bytes: 6e6 } }, { 'Image Request': call }))[0].json.final.error).toBe('image_too_large');
     expect((await run('v_prepare.js', { ...base, att: null }, { 'Image Request': call }))[0].json.final.error).toBe('image_not_available');
   });
-  const prep = { meta: { model: 'qwen/qwen3.7-flash', started_at: Date.now() } };
+  const prep = { meta: { model: 'stealth/space-bunny-alpha', started_at: Date.now() } };
   const good = { image_type: 'error_screenshot', visible_details: ['Netflix error'], extracted_text: [{ text: 'ত্রুটি NW-2-5', language: 'bn' }],
     references: [{ kind: 'error_code', value: 'NW-2-5' }], unreadable_areas: [], uncertainties: [], suggested_next_step: 'check network' };
   it('validates observations and keeps Bangla text; usage without numbers stays null', async () => {

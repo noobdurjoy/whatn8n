@@ -68,7 +68,7 @@ The seed writes safe defaults:
 - follow-ups and order notifications off;
 - Telegram notifications configured per category but sent only after an owner pairs the bot;
 - a daily AI budget of 5 USD;
-- chat model `deepseek/deepseek-v4.1-flash`, vision model `qwen/qwen3.7-flash`.
+- chat model `deepseek/deepseek-v4.1-flash`, vision model `stealth/space-bunny-alpha`.
 
 ## 4. First staff account and the dashboard
 
@@ -96,7 +96,7 @@ The workflow uses only the credentials below. They belong to this project alone:
 | `IDS Backend Token (n8n to backend)` | Header Auth | Name `X-Internal-Token`, Value = `BACKEND_INTERNAL_TOKEN` |
 
 How to create the keys:
-- **OpenRouter:** openrouter.ai → Keys → *Create key*, name it `IDS WhatsApp`, and set a **credit limit** so the key itself caps spending. The chat model is the DeepSeek model configured in the dashboard (Settings → AI models); images always use `qwen/qwen3.7-flash`. Both use this one key; nothing falls back to another key.
+- **OpenRouter:** openrouter.ai → Keys → *Create key*, name it `IDS WhatsApp`, and set a **credit limit** so the key itself caps spending. The chat model is the DeepSeek model configured in the dashboard (Settings → AI models); images always use `stealth/space-bunny-alpha`. Both use this one key; nothing falls back to another key.
 - **Zernio:** Zernio dashboard → API keys → create a key for this project.
 - **WooCommerce:** WooCommerce → Settings → Advanced → REST API → *Add key* twice (one Read, one Read/Write), each for a shop admin user. The Read/Write key is only ever sent to `PUT /wp-json/wc/v3/products/{id}` or `/products/{id}/variations/{id}` with a body holding `stock_quantity` **or** `stock_status`; no node can reach orders, payments or other product fields with it. Revoke it in WooCommerce to disable Telegram stock changes entirely.
 - **Tokens:** `N8N_INTERNAL_TOKEN` and `BACKEND_INTERNAL_TOKEN` are two different random values (e.g. `openssl rand -hex 32`), created only for these webhooks and never reused as an API key.

@@ -8,7 +8,7 @@ A WhatsApp customer support and sales system for the WooCommerce shop
 - **Telegram admin bot** (a private bot for this project only): the paired owner checks status, updates WooCommerce stock, saves permanent knowledge, temporary notices and private notes, and sends exact WhatsApp replies — in English, Bangla or Banglish — and receives notifications per category (immediately, daily summary or off).
 - **PostgreSQL** holds all application data and every control decision. It is a separate database from n8n's own.
 - **Next.js dashboard and backend** give staff a shared inbox: takeover, co-pilot drafts, approvals, knowledge review, metrics, emergency stop.
-- **OpenRouter** provides the language models: a configurable DeepSeek chat model for replies, and `qwen/qwen3.7-flash` for reading customer images.
+- **OpenRouter** provides the language models: a configurable DeepSeek chat model for replies, and `stealth/space-bunny-alpha` for reading customer images.
 
 The system is built for safe operation. The database decides who may send what and when. Models only propose. A single dispatch branch sends every outgoing message, and it re-checks mode, takeover, the emergency stop and the 24-hour window before each send. AI answering is **off** after installation.
 

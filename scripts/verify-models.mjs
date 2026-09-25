@@ -17,7 +17,7 @@ if ((!chat || !vision) && process.env.DATABASE_URL) {
   chat ??= m.chat_model; vision ??= m.vision_model;
 }
 chat ??= 'deepseek/deepseek-v4.1-flash';
-vision ??= 'qwen/qwen3.7-flash';
+vision ??= 'stealth/space-bunny-alpha';
 
 const sdk = new OpenRouter({ apiKey: process.env.OPENROUTER_API_KEY || undefined });
 let failed = false;

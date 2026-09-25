@@ -31,7 +31,7 @@ const DEFAULT_SETTINGS = {
     chat_model: 'deepseek/deepseek-v4.1-flash',
     chat_reasoning_effort: 'low',
     chat_max_tokens: 1500,
-    vision_model: 'qwen/qwen3.7-flash',
+    vision_model: 'stealth/space-bunny-alpha',
     vision_max_tokens: 1200,
     vision_response_format: 'json_object',
     summary_model: 'deepseek/deepseek-v4.1-flash',
