@@ -1,0 +1,25 @@
+# Override for the shared VPS (75.119.130.7). Used by deploy/vps/install.sh:
+#   docker compose -p ids-wa --env-file .compose.env \
+#     -f docker-compose.yml -f deploy/vps/docker-compose.vps.yml ...
+# That host already runs another PostgreSQL on 127.0.0.1:5432 and another
+# Next.js app on :3000, so this stack publishes no database port and puts the
+# dashboard on 127.0.0.1:3100 (nginx proxies support.wamsg.site to it).
+# n8n runs in Docker on the network "n8n_default"; the database joins that
+# network under the alias "ids-wa-db", so only containers on it (n8n) can
+# reach it, and never from the internet.
+services:
+  db:
+    ports: !reset []
+    networks:
+      default: {}
+      n8n:
+        aliases: [ids-wa-db]
+
+  app:
+    ports: !override
+      - "127.0.0.1:3100:3000"
+
+networks:
+  n8n:
+    name: n8n_default
+    external: true

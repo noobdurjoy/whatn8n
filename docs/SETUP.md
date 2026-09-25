@@ -23,6 +23,19 @@ openssl rand -hex 32      # generate each secret/token separately
 
 `N8N_INTERNAL_TOKEN` and `BACKEND_INTERNAL_TOKEN` must be different values. Each one is also stored in an n8n credential (step 5). Generate them on the server and type or paste them only into `.env` and the n8n credential form, never into chat or tickets.
 
+### Shared VPS (75.119.130.7)
+
+That server already runs n8n in Docker (network `n8n_default`), another PostgreSQL on `127.0.0.1:5432`, another app on `:3000`, and nginx on ports 80/443. `deploy/vps/install.sh` fits around them:
+- Docker project `ids-wa`; the database publishes no port and joins `n8n_default` as `ids-wa-db`;
+- the dashboard listens on `127.0.0.1:3100`;
+- the nginx site `support.wamsg.site` gets HTTPS from certbot.
+
+It generates every secret on the server and asks for the owner login. It writes the values for the last three n8n credentials to `n8n-credentials.txt` (mode 600). It is safe to run again.
+
+```bash
+cd /opt/ids-whatsapp && git pull && bash deploy/vps/install.sh
+```
+
 ## 3. Database
 
 With Docker:
