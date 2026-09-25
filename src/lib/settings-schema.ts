@@ -9,6 +9,8 @@ const text3 = z.object({ en: z.string().max(500), bn: z.string().max(500).option
 
 export const SETTINGS_SCHEMAS: Record<string, z.ZodTypeAny> = {
   shop_name: z.string().min(1).max(100),
+  shop_base_url: z.string().url().regex(/^https:\/\//),
+  dashboard_url: z.string().url(),
   default_mode: z.enum(['AUTO', 'COPILOT', 'HUMAN']),
   agents_can_resume_ai: z.boolean(),
   agents_see_assigned_only: z.boolean(),
@@ -52,7 +54,7 @@ export const SETTINGS_SCHEMAS: Record<string, z.ZodTypeAny> = {
     after_hours_note: text3,
   }),
   response_time_targets: z.object({ first_response_minutes: z.number().int().min(1).max(1440), reminder_after_minutes: z.number().int().min(1).max(1440) }),
-  notifications: z.object({ telegram_enabled: z.boolean(), notify_on: z.array(z.string().max(40)).max(20) }),
+  notifications: z.object({ telegram_enabled: z.boolean(), telegram_chat_id: z.string().regex(/^-?\d{0,20}$/), notify_on: z.array(z.string().max(40)).max(20) }),
   order_ops: z.object({ create_requires_staff_approval: z.boolean(), prefer_hosted_checkout: z.boolean(), unpaid_order_creation_enabled: z.boolean() }),
   retention: z.object({
     message_content_days: z.number().int().min(30).max(3650),

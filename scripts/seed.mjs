@@ -16,6 +16,8 @@ if (!url) {
 // Automatic replies are enabled deliberately, after the control tests pass.
 const DEFAULT_SETTINGS = {
   shop_name: process.env.SHOP_NAME || 'Infinity Digital Shop',
+  shop_base_url: process.env.WOO_BASE_URL || 'https://infinitydigitalshop.com',
+  dashboard_url: process.env.APP_ORIGIN || 'https://support.example.com',
   ai_enabled: false,
   sending_enabled: true,
   default_mode: 'COPILOT',
@@ -72,7 +74,7 @@ const DEFAULT_SETTINGS = {
     },
   },
   response_time_targets: { first_response_minutes: 10, reminder_after_minutes: 15 },
-  notifications: { telegram_enabled: false, notify_on: ['handoff', 'send_failed', 'send_unknown', 'emergency_stop', 'connection_down'] },
+  notifications: { telegram_enabled: false, telegram_chat_id: '', notify_on: ['handoff', 'send_failed', 'send_unknown', 'emergency_stop', 'connection_down'] },
   order_ops: { create_requires_staff_approval: true, prefer_hosted_checkout: true, unpaid_order_creation_enabled: false },
   retention: {
     message_content_days: 730,

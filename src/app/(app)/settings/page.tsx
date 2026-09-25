@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { containsBangla, fmtTime, useApi, useSession } from '@/components/session';
 
 const LABELS: Record<string, string> = {
-  shop_name: 'Shop name', default_mode: 'Mode for new conversations', agents_can_resume_ai: 'Support agents may resume AI',
+  shop_name: 'Shop name', shop_base_url: 'Shop website (WooCommerce)', dashboard_url: 'Dashboard address (used in staff alerts)', default_mode: 'Mode for new conversations', agents_can_resume_ai: 'Support agents may resume AI',
   agents_see_assigned_only: 'Agents see only their own + unassigned chats', per_conversation_sends_per_minute: 'Max sends per chat per minute',
   marketing_max_per_week: 'Max marketing messages per customer per week', burst_debounce_seconds: 'Wait for message bursts (seconds)',
   ai_daily_budget_usd: 'AI spending limit (USD, rolling 24h)', models: 'AI models', vision: 'Image understanding', attachments: 'Attachments',

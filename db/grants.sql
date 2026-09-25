@@ -49,6 +49,15 @@ BEGIN
       app.submit_knowledge_proposal(text, uuid, text, text, text, text, jsonb, jsonb, text),
       app.raise_alert(text, text, text, jsonb, text),
       app.get_outbound_upload(uuid), app.set_outbound_media_url(uuid, text),
+      app.normalize_phone(text), app.link_order_if_phone_matches(uuid, bigint, text),
+      app.enqueue_system_message(uuid, text, text, text, jsonb, text, timestamptz),
+      app.conversations_needing_summary(integer), app.summary_input(uuid),
+      app.upsert_customer_memory_for_conversation(uuid, text, text, uuid),
+      app.learning_candidates(timestamptz, integer), app.published_knowledge_index(), app.document_id_for_slug(text),
+      app.overdue_conversations(), app.apply_retention(), app.record_health(text, text, jsonb),
+      app.unknown_sends_for_reconcile(), app.attach_reconcile_evidence(uuid, jsonb), app.pending_attachments(uuid[]),
+      app.notification_facts(uuid), app.upsert_woo_order_ref(jsonb), app.upsert_woo_products(jsonb),
+      app.get_webhook_event(uuid), app.due_outbound(integer),
       app.setting(text), app.setting_bool(text, boolean), app.setting_int(text, integer)
     TO wa_n8n;
     -- Read access needed by the workflows, and the WooCommerce sync tables.
