@@ -126,6 +126,10 @@ if [ ! -f "$SITE" ]; then
   systemctl reload nginx
   command -v certbot >/dev/null || apt-get install -y certbot python3-certbot-nginx
   certbot --nginx -d "$DOMAIN" --redirect
+  # The other sites here listen on 75.119.130.7:443; nginx prefers IP-bound
+  # listeners, so a plain "listen 443" block would never be chosen.
+  sed -i -E 's/^(\s*)listen 443 ssl;/\1listen 75.119.130.7:443 ssl;/; s/^(\s*)listen 80;/\1listen 75.119.130.7:80;/' "$SITE"
+  nginx -t && systemctl reload nginx
 else
   echo "nginx site already present: $SITE (not changed)"
 fi
