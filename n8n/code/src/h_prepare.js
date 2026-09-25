@@ -5,11 +5,12 @@
 // to by short run-local references only. Raw private chats are never copied
 // into the shared knowledge base: the output is only a set of proposals that
 // the owner must approve.
-// @include shared/redact.js
+// @include shared/redact.js: redactPersonal
 
 const row = $input.first().json || {};
 const cands = Array.isArray(row.cands) ? row.cands : [];
 const models = row.models || {};
+if (row.budget && row.budget.within_budget === false) return [{ json: { skip: true, reason: 'ai_budget_reached' } }];
 if (!cands.length || !models.chat_model) return [{ json: { skip: true, reason: 'no_candidates' } }];
 
 const refs = {};

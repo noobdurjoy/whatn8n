@@ -1,0 +1,260 @@
+{
+  "name": "WA · A2 Media Download",
+  "nodes": [
+    {
+      "id": "a2_media-01",
+      "name": "Media Request",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "a2_media-02",
+      "name": "Load Pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.pending_attachments(ARRAY(SELECT jsonb_array_elements_text(coalesce(p->'ids', '[]')))::uuid[]) AS list,\n       app.setting('attachments') AS cfg FROM (SELECT $1::jsonb AS p) x",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify({ ids: $json.attachment_ids || $json.media || [] }) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "a2_media-03",
+      "name": "Plan Downloads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · A2 Media Download — \"Plan Downloads\"\n// Input: { list, cfg } from app.pending_attachments and the attachments\n// setting. Only Zernio's own authenticated media endpoint is ever fetched:\n// the URL must be https://zernio.com/api/v1/... . Links that appear inside\n// customer messages or images are never fetched.\n\nconst row = $input.first().json || {};\nconst list = Array.isArray(row.list) ? row.list : [];\nconst out = [];\nfor (const a of list) {\n  let ok = false;\n  try {\n    const u = new URL(String(a.media_ref || ''));\n    ok = u.protocol === 'https:' && u.host === 'zernio.com' && u.pathname.startsWith('/api/v1/') && !u.username && !u.password && !u.port;\n  } catch (e) { ok = false; }\n  out.push({ json: { attachment_id: a.attachment_id, url: ok ? String(a.media_ref) : null, blocked: !ok } });\n}\nreturn out.length ? out : [];\n"
+      }
+    },
+    {
+      "id": "a2_media-04",
+      "name": "Download Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.blocked ? '' : $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "NAWZ1V27MYMGkozE",
+          "name": "Custom Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a2_media-05",
+      "name": "Check Download",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · A2 Media Download — \"Check Download\"\n// One output item per planned attachment (same order as \"Plan Downloads\").\n// The bytes go to the database as base64; store_attachment_blob re-checks\n// size, allowed type and the file's magic bytes. Nothing is logged.\n// Expired media (Meta keeps it for a limited time) is marked 'expired' so\n// the assistant asks the customer to send it again.\n\nconst plans = $('Plan Downloads').all().map((i) => i.json);\nconst cfg = $('Load Pending').first().json.cfg || {};\nconst maxBytes = Number(cfg.max_bytes) || 16 * 1024 * 1024;\nconst allowed = Array.isArray(cfg.allowed_mime_types) ? cfg.allowed_mime_types : ['image/jpeg', 'image/png', 'image/webp'];\nconst items = $input.all();\nconst out = [];\nfor (let i = 0; i < items.length; i++) {\n  const plan = plans[i] || {};\n  const j = items[i].json || {};\n  if (!plan.attachment_id) continue;\n  if (plan.blocked) { out.push({ json: { ok: false, attachment_id: plan.attachment_id, status: 'failed', error: 'media_url_not_allowed' } }); continue; }\n  const status = typeof j.statusCode === 'number' ? j.statusCode : null;\n  if (j.error || status === null) { out.push({ json: { ok: false, attachment_id: plan.attachment_id, status: 'failed', error: 'download_error' } }); continue; }\n  if (status === 400 || status === 404 || status === 410) { out.push({ json: { ok: false, attachment_id: plan.attachment_id, status: 'expired', error: 'http_' + status } }); continue; }\n  if (status < 200 || status >= 300 || !items[i].binary || !items[i].binary.data) {\n    out.push({ json: { ok: false, attachment_id: plan.attachment_id, status: 'failed', error: 'http_' + status } });\n    continue;\n  }\n  const buf = await this.helpers.getBinaryDataBuffer(i, 'data');\n  const headers = j.headers || {};\n  const ct = String(headers['content-type'] || items[i].binary.data.mimeType || '').split(';')[0].trim().toLowerCase();\n  if (buf.length > maxBytes) { out.push({ json: { ok: false, attachment_id: plan.attachment_id, status: 'failed', error: 'too_large: ' + buf.length + ' bytes' } }); continue; }\n  out.push({ json: { ok: true, attachment_id: plan.attachment_id, mime: ct, data_base64: buf.toString('base64'), max_bytes: maxBytes, allowed: allowed } });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "a2_media-06",
+      "name": "Downloaded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.ok }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a2_media-07",
+      "name": "Store Blob",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1560,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.store_attachment_blob((p->>'attachment_id')::uuid, p->>'mime', p->>'data_base64', (p->>'max_bytes')::int,\n         ARRAY(SELECT jsonb_array_elements_text(p->'allowed'))) AS r FROM (SELECT $1::jsonb AS p) x",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "a2_media-08",
+      "name": "Mark Failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1560,
+        180
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.mark_attachment_fetch_failed((p->>'attachment_id')::uuid, p->>'status', p->>'error') AS ok FROM (SELECT $1::jsonb AS p) x",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Media Request": {
+      "main": [
+        [
+          {
+            "node": "Load Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Pending": {
+      "main": [
+        [
+          {
+            "node": "Plan Downloads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Downloads": {
+      "main": [
+        [
+          {
+            "node": "Download Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Media": {
+      "main": [
+        [
+          {
+            "node": "Check Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Download": {
+      "main": [
+        [
+          {
+            "node": "Downloaded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Downloaded?": {
+      "main": [
+        [
+          {
+            "node": "Store Blob",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

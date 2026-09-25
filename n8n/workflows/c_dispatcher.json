@@ -1,0 +1,813 @@
+{
+  "name": "WA · C Dispatcher",
+  "nodes": [
+    {
+      "id": "c_dispatch-01",
+      "name": "Dispatch Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa-dispatch",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {
+          "noResponseBody": false
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": null,
+          "name": "WA Internal Token"
+        }
+      },
+      "webhookId": "wa-dispatch"
+    },
+    {
+      "id": "c_dispatch-02",
+      "name": "Dispatch Request",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        180
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "c_dispatch-03",
+      "name": "Every 15 Seconds",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        360
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c_dispatch-04",
+      "name": "Due Outbound",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT outbound_id FROM app.due_outbound(20)",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "c_dispatch-05",
+      "name": "Dispatch Each",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $workflow.id }}"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "c_dispatch-06",
+      "name": "Claim Outbound",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        180
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.claim_outbound((p->>'outbound_id')::uuid, 'n8n:' || coalesce(p->>'exec', '')) AS claim FROM (SELECT $1::jsonb AS p) x\n       WHERE p->>'outbound_id' ~* '^[0-9a-f-]{36}$'",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify({ outbound_id: $json.body ? $json.body.outbound_id : $json.outbound_id, exec: $execution.id }) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "c_dispatch-07",
+      "name": "Build Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        180
+      ],
+      "parameters": {
+        "jsCode": "// WA · C Dispatcher — \"Build Send\"\n// Input: { claim } from \"Claim Outbound\" (app.claim_outbound). Every sender\n// (AI replies, staff replies, approved drafts, handoff acknowledgements,\n// scheduled and system messages, retries) comes through this one path, and\n// claim_outbound has already re-checked the emergency stop, AI switch, mode,\n// mode version, revision, holds, window, consent and pacing under the\n// conversation lock. Nothing is sent unless the claim succeeded.\n// ---- begin shared/send-result.js (buildSendBody) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----\n// Builds the Zernio request body from a claimed outbox row. Only fields the\n// API documents are used; unknown payload keys are dropped.\n/**\n * @param {any} claim\n * @returns {Record<string, any>}\n */\nfunction buildSendBody(claim) {\n  /** @type {Record<string, any>} */\n  const body = { accountId: claim.provider_account_id };\n  const p = claim.payload || {};\n  if (p.template && typeof p.template.name === 'string') {\n    body.template = { elements: [{ name: p.template.name, language: p.template.language || 'en_US', components: Array.isArray(p.template.components) ? p.template.components : [] }] };\n  } else {\n    if (claim.body) body.message = claim.body;\n    if (p.attachment && typeof p.attachment.url === 'string') {\n      body.attachmentUrl = p.attachment.url;\n      body.attachmentType = ['image', 'video', 'audio', 'file'].includes(p.attachment.type) ? p.attachment.type : 'file';\n      if (p.attachment.filename && body.attachmentType === 'file') body.attachmentName = String(p.attachment.filename).slice(0, 120);\n    }\n    if (p.reply_to && typeof p.reply_to === 'string') body.replyTo = p.reply_to;\n  }\n  return body;\n}\n// ---- end shared/send-result.js ----\n\nconst claim = ($input.first().json || {}).claim || {};\nif (!claim.claimed) {\n  return [{ json: { route: 'skip', reason: claim.reason || 'not_claimed', final: Boolean(claim.final) } }];\n}\nconst base = { outbound_id: claim.outbound_id, attempt_no: claim.attempt_no, idempotency_key: claim.idempotency_key, kind: claim.kind };\nfunction reject(code) {\n  return [{ json: Object.assign({ route: 'record', record: { outcome: 'rejected_permanent', http_status: null, provider_message_id: null, response: null, error: { code: code }, retry_after_seconds: null } }, base) }];\n}\nif (!claim.provider_conversation_id || !/^[\\w-]{1,128}$/.test(claim.provider_conversation_id)) return reject('missing_provider_conversation');\nif (!claim.provider_account_id) return reject('missing_provider_account');\n\nconst p = claim.payload || {};\nif (p.attachment && p.attachment.upload_id && !p.attachment.url) {\n  // A staff file stored in our database: upload it to Zernio's media storage\n  // first (presigned PUT), then send the public URL Zernio returns.\n  return [{ json: Object.assign({ route: 'upload', claim: claim }, base) }];\n}\n\nconst body = buildSendBody(claim);\nif (!body.message && !body.template && !body.attachmentUrl) return reject('empty_message');\nreturn [{ json: Object.assign({ route: 'send', path: '/v1/inbox/conversations/' + encodeURIComponent(claim.provider_conversation_id) + '/messages', send_body: body }, base) }];\n"
+      }
+    },
+    {
+      "id": "c_dispatch-08",
+      "name": "Route Send",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        780,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "send",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "send"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "upload",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "upload"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "record",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "record"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c_dispatch-09",
+      "name": "Load Upload",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1040,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT u.* FROM (SELECT $1::jsonb AS p) x, app.get_outbound_upload((p->>'outbound_id')::uuid) u",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify({ outbound_id: $json.outbound_id }) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "c_dispatch-10",
+      "name": "Presign Upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://zernio.com/api/v1/media/presign",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filename: $json.file_name, contentType: $json.mime_type, size: $json.size_bytes }) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "NAWZ1V27MYMGkozE",
+          "name": "Custom Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "c_dispatch-11",
+      "name": "Prepare Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · C Dispatcher — \"Prepare Upload\"\n// Input: the staff upload row (app.get_outbound_upload) and the presign\n// response from Zernio (POST /v1/media/presign -> { uploadUrl, publicUrl }).\n// Output: the file as binary for the PUT, or a retryable failure (nothing\n// has been sent to the customer yet, so retrying is safe).\n\nconst b = $('Build Send').first().json;\nconst up = $('Load Upload').first().json || {};\nconst pre = $input.first().json || {};\nfunction fail(code) {\n  return [{ json: { route: 'record', outbound_id: b.outbound_id, attempt_no: b.attempt_no,\n    record: { outcome: 'rejected_retryable', http_status: null, provider_message_id: null, response: null, error: { code: code }, retry_after_seconds: 60 } } }];\n}\nif (!up.data_base64) return fail('upload_not_found');\nconst body = pre.body || pre;\nconst uploadUrl = body && body.uploadUrl;\nconst publicUrl = body && body.publicUrl;\nif (typeof uploadUrl !== 'string' || !/^https:\\/\\//.test(uploadUrl)) return fail('presign_failed');\nif (typeof publicUrl !== 'string' || !/^https:\\/\\//.test(publicUrl)) return fail('presign_failed');\nreturn [{\n  json: { route: 'put', upload_url: uploadUrl, public_url: publicUrl, mime_type: up.mime_type },\n  binary: { data: { data: up.data_base64, mimeType: up.mime_type, fileName: up.file_name } },\n}];\n"
+      }
+    },
+    {
+      "id": "c_dispatch-12",
+      "name": "Upload Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1820,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "put",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "put"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "record",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "record"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c_dispatch-13",
+      "name": "Upload File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2080,
+        0
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.upload_url }}",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "c_dispatch-14",
+      "name": "After Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · C Dispatcher — \"After Upload\"\n// Input: the response of the presigned PUT. On success the outbox payload\n// gets the public URL (app.set_outbound_media_url, next node) and the send\n// continues; on failure the attempt is recorded as retryable.\n// ---- begin shared/send-result.js (buildSendBody) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----\n// Builds the Zernio request body from a claimed outbox row. Only fields the\n// API documents are used; unknown payload keys are dropped.\n/**\n * @param {any} claim\n * @returns {Record<string, any>}\n */\nfunction buildSendBody(claim) {\n  /** @type {Record<string, any>} */\n  const body = { accountId: claim.provider_account_id };\n  const p = claim.payload || {};\n  if (p.template && typeof p.template.name === 'string') {\n    body.template = { elements: [{ name: p.template.name, language: p.template.language || 'en_US', components: Array.isArray(p.template.components) ? p.template.components : [] }] };\n  } else {\n    if (claim.body) body.message = claim.body;\n    if (p.attachment && typeof p.attachment.url === 'string') {\n      body.attachmentUrl = p.attachment.url;\n      body.attachmentType = ['image', 'video', 'audio', 'file'].includes(p.attachment.type) ? p.attachment.type : 'file';\n      if (p.attachment.filename && body.attachmentType === 'file') body.attachmentName = String(p.attachment.filename).slice(0, 120);\n    }\n    if (p.reply_to && typeof p.reply_to === 'string') body.replyTo = p.reply_to;\n  }\n  return body;\n}\n// ---- end shared/send-result.js ----\n\nconst b = $('Build Send').first().json;\nconst prep = $('Prepare Upload').first().json;\nconst r = $input.first().json || {};\nconst status = typeof r.statusCode === 'number' ? r.statusCode : null;\nif (r.error || status === null || status < 200 || status >= 300) {\n  return [{ json: { route: 'record', outbound_id: b.outbound_id, attempt_no: b.attempt_no,\n    record: { outcome: 'rejected_retryable', http_status: status, provider_message_id: null, response: null, error: { code: 'media_upload_failed' }, retry_after_seconds: 60 } } }];\n}\nconst claim = JSON.parse(JSON.stringify(b.claim));\nclaim.payload.attachment.url = prep.public_url;\nif (!claim.payload.attachment.type) {\n  const m = String(prep.mime_type || '');\n  claim.payload.attachment.type = m.startsWith('image/') ? 'image' : m.startsWith('video/') ? 'video' : m.startsWith('audio/') ? 'audio' : 'file';\n}\nreturn [{ json: { route: 'send', outbound_id: b.outbound_id, attempt_no: b.attempt_no, idempotency_key: b.idempotency_key, kind: b.kind,\n  public_url: prep.public_url,\n  path: '/v1/inbox/conversations/' + encodeURIComponent(claim.provider_conversation_id) + '/messages',\n  send_body: buildSendBody(claim) } }];\n"
+      }
+    },
+    {
+      "id": "c_dispatch-15",
+      "name": "After Upload Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2600,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "send",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "send"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "record",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "record"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c_dispatch-16",
+      "name": "Save Media URL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2860,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.set_outbound_media_url((p->>'outbound_id')::uuid, p->>'url') AS ok FROM (SELECT $1::jsonb AS p) x",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify({ outbound_id: $json.outbound_id, url: $json.public_url }) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "c_dispatch-17",
+      "name": "Send Ready",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · C Dispatcher — \"Send Ready\"\n// Joins the direct path and the upload path: the item the \"Send Message\"\n// request is built from. Runs only on a claimed row.\n\nconst viaUpload = $('After Upload').isExecuted ? $('After Upload').first().json : null;\nconst s = viaUpload && viaUpload.route === 'send' ? viaUpload : $('Build Send').first().json;\nreturn [{ json: { outbound_id: s.outbound_id, attempt_no: s.attempt_no, idempotency_key: s.idempotency_key, kind: s.kind, path: s.path, send_body: s.send_body } }];\n"
+      }
+    },
+    {
+      "id": "c_dispatch-18",
+      "name": "Send Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3380,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://zernio.com/api' + $json.path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.idempotency_key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.send_body) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "NAWZ1V27MYMGkozE",
+          "name": "Custom Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "c_dispatch-19",
+      "name": "Classify Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3640,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · C Dispatcher — \"Classify Result\"\n// Input: the Zernio send response (full response, errors not thrown) or a\n// network error item. A timeout or 5xx is AMBIGUOUS: recorded as 'unknown'\n// and reconciled, never blindly retried (the outbox id is also sent as the\n// Idempotency-Key, so a replay of the same request cannot double-send).\n// ---- begin shared/send-result.js (classifySendResult) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----\n// Classifies a Zernio \"send message\" HTTP result for the dispatcher.\n// Dependency-free; inlined into the n8n dispatch workflow.\n//\n// Based on Zernio's documented contract for\n// POST /v1/inbox/conversations/{conversationId}/messages:\n// - 2xx: accepted; data.messageId is the WhatsApp wamid.\n// - Idempotency-Key: same key + same body replays the original 2xx;\n//   409 = same key still in flight; 422 = same key reused with another body.\n// - A 5xx or a network timeout is AMBIGUOUS: the platform may have accepted\n//   the message, the key may have been released, and a blind retry could send\n//   twice. Reconcile first (list the conversation's messages), never auto-retry.\n// - WhatsApp rejects bursts to one recipient with error 131056.\n//\n// input: { status: number|null, body: object|string|null, headers: object|null,\n//          networkError: string|null }   networkError: 'timeout' | 'reset' | 'refused' | 'dns' | other\n// output: { outcome, provider_message_id, retry_after_seconds, error }\nfunction header(headers, name) {\n  if (!headers) return null;\n  const k = Object.keys(headers).find((h) => h.toLowerCase() === name);\n  return k ? headers[k] : null;\n}\n\nfunction classifySendResult(input) {\n  const status = input && typeof input.status === 'number' ? input.status : null;\n  let body = input ? input.body : null;\n  if (typeof body === 'string') {\n    try { body = JSON.parse(body); } catch (e) { body = { raw: body.slice(0, 500) }; }\n  }\n  body = body || {};\n  const retryAfter = Number(header(input && input.headers, 'retry-after')) || null;\n  const platformCode = body.platformError && typeof body.platformError.code === 'number' ? body.platformError.code : null;\n  const err = (code, extra) => Object.assign({ code, http_status: status, message: String(body.error || body.message || '').slice(0, 300), platform_code: platformCode }, extra || {});\n\n  if (input && input.networkError) {\n    // Refused / DNS failure: the request never reached Zernio. Safe to retry.\n    if (['refused', 'dns'].includes(input.networkError)) {\n      return { outcome: 'rejected_retryable', provider_message_id: null, retry_after_seconds: 30, error: err('network_' + input.networkError) };\n    }\n    // Timeout / reset after sending: unknown whether it was accepted.\n    return { outcome: 'ambiguous', provider_message_id: null, retry_after_seconds: null, error: err('network_' + input.networkError) };\n  }\n  if (status === null) {\n    return { outcome: 'ambiguous', provider_message_id: null, retry_after_seconds: null, error: err('no_status') };\n  }\n  if (status >= 200 && status < 300) {\n    const id = body.data && typeof body.data.messageId === 'string' ? body.data.messageId : null;\n    return { outcome: 'accepted', provider_message_id: id, retry_after_seconds: null, error: null };\n  }\n  if (status === 409) {\n    return { outcome: 'rejected_retryable', provider_message_id: null, retry_after_seconds: retryAfter || 10, error: err('idempotency_in_flight') };\n  }\n  if (status === 422) {\n    return { outcome: 'rejected_permanent', provider_message_id: null, retry_after_seconds: null, error: err('idempotency_key_reused') };\n  }\n  if (status === 429) {\n    return { outcome: 'rejected_retryable', provider_message_id: null, retry_after_seconds: retryAfter || 60, error: err('rate_limited') };\n  }\n  if (status === 400 && platformCode === 131056) {\n    return { outcome: 'rejected_retryable', provider_message_id: null, retry_after_seconds: 60, error: err('recipient_rate_limited') };\n  }\n  if (status === 400 && platformCode === 131047) {\n    return { outcome: 'rejected_permanent', provider_message_id: null, retry_after_seconds: null, error: err('outside_customer_service_window') };\n  }\n  if (status === 401 || status === 403) {\n    return { outcome: 'rejected_permanent', provider_message_id: null, retry_after_seconds: null, error: err('provider_auth_or_access') };\n  }\n  if (status >= 500) {\n    return { outcome: 'ambiguous', provider_message_id: null, retry_after_seconds: null, error: err('provider_5xx') };\n  }\n  return { outcome: 'rejected_permanent', provider_message_id: null, retry_after_seconds: null, error: err(body.code || 'rejected') };\n}\n// ---- end shared/send-result.js ----\n\nconst s = $('Send Ready').first().json;\nconst r = $input.first().json || {};\nlet input;\nif (r.error && typeof r.statusCode !== 'number') {\n  const e = r.error || {};\n  const code = String(e.code || (e.cause && e.cause.code) || e.message || '').toUpperCase();\n  const net = /ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|TIMEOUT/.test(code) ? 'timeout'\n    : /ECONNRESET|EPIPE|SOCKET HANG UP/.test(code) ? 'reset'\n    : /ECONNREFUSED/.test(code) ? 'refused'\n    : /ENOTFOUND|EAI_AGAIN/.test(code) ? 'dns' : 'unknown';\n  input = { status: null, body: null, headers: null, networkError: net };\n} else {\n  input = { status: r.statusCode, body: r.body, headers: r.headers || null, networkError: null };\n}\nconst c = classifySendResult(input);\nlet body = r.body;\nif (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { body = { raw: body.slice(0, 500) }; } }\n// Only the ids and status are stored, not the whole provider response.\nconst response = body && typeof body === 'object' ? { success: body.success, messageId: body.data && body.data.messageId, status: input.status } : { status: input.status };\nreturn [{ json: { route: 'record', outbound_id: s.outbound_id, attempt_no: s.attempt_no, record: {\n  outcome: c.outcome, http_status: input.status, provider_message_id: c.provider_message_id,\n  response: response, error: c.error, retry_after_seconds: c.retry_after_seconds,\n} } }];\n"
+      }
+    },
+    {
+      "id": "c_dispatch-20",
+      "name": "Record Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3900,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.record_send_result((p->>'outbound_id')::uuid, (p->>'attempt_no')::int, r->>'outcome', (r->>'http_status')::int,\n         r->>'provider_message_id', nullif(r->'response', 'null'::jsonb), nullif(r->'error', 'null'::jsonb), (r->>'retry_after_seconds')::int) AS r\n       FROM (SELECT $1::jsonb AS p) x, LATERAL (SELECT p->'record' AS r) y",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Dispatch Webhook": {
+      "main": [
+        [
+          {
+            "node": "Claim Outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Request": {
+      "main": [
+        [
+          {
+            "node": "Claim Outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 15 Seconds": {
+      "main": [
+        [
+          {
+            "node": "Due Outbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Due Outbound": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Each",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Outbound": {
+      "main": [
+        [
+          {
+            "node": "Build Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Send": {
+      "main": [
+        [
+          {
+            "node": "Route Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Send": {
+      "main": [
+        [
+          {
+            "node": "Send Ready",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Upload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Upload": {
+      "main": [
+        [
+          {
+            "node": "Presign Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Presign Upload": {
+      "main": [
+        [
+          {
+            "node": "Prepare Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Upload": {
+      "main": [
+        [
+          {
+            "node": "Upload Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Route": {
+      "main": [
+        [
+          {
+            "node": "Upload File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload File": {
+      "main": [
+        [
+          {
+            "node": "After Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "After Upload": {
+      "main": [
+        [
+          {
+            "node": "After Upload Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "After Upload Route": {
+      "main": [
+        [
+          {
+            "node": "Save Media URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Media URL": {
+      "main": [
+        [
+          {
+            "node": "Send Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Ready": {
+      "main": [
+        [
+          {
+            "node": "Send Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Message": {
+      "main": [
+        [
+          {
+            "node": "Classify Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Result": {
+      "main": [
+        [
+          {
+            "node": "Record Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

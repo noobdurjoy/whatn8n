@@ -3,8 +3,8 @@
 // Output: one item { ready, state } where state carries everything later
 // nodes need. The model receives only redacted, scoped context for THIS
 // customer; customer text is marked as data, not instructions.
-// @include shared/redact.js
-// @include shared/escalation.js
+// @include shared/redact.js: redactSecretsText
+// @include shared/escalation.js: isWithinBusinessHours
 
 const input = $input.first().json;
 const d = input.d || null;

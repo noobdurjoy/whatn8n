@@ -5,7 +5,7 @@
 // claim_outbound has already re-checked the emergency stop, AI switch, mode,
 // mode version, revision, holds, window, consent and pacing under the
 // conversation lock. Nothing is sent unless the claim succeeded.
-// @include shared/send-result.js
+// @include shared/send-result.js: buildSendBody
 
 const claim = ($input.first().json || {}).claim || {};
 if (!claim.claimed) {

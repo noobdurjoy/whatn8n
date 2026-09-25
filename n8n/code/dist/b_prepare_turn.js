@@ -3,7 +3,7 @@
 // Output: one item { ready, state } where state carries everything later
 // nodes need. The model receives only redacted, scoped context for THIS
 // customer; customer text is marked as data, not instructions.
-// ---- begin shared/redact.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
+// ---- begin shared/redact.js (redactSecretsText) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Redaction helpers. Dependency-free; inlined into n8n Code nodes.
 //
 // redactSecrets: applied to EVERYTHING before it reaches a model, a log line
@@ -11,7 +11,6 @@
 //   login/token links.
 // redactPersonal: additionally applied before conversation text enters the
 //   daily-learning review: phones, emails, order numbers, transaction ids.
-
 function luhnValid(digits) {
   let sum = 0;
   let dbl = false;
@@ -25,6 +24,7 @@ function luhnValid(digits) {
 }
 
 const BN_DIGITS = '০১২৩৪৫৬৭৮৯';
+
 function asciiDigits(s) {
   return s.replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)));
 }
@@ -92,51 +92,7 @@ function redactPersonal(input) {
   return s;
 }
 // ---- end shared/redact.js ----
-// ---- begin shared/escalation.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
-// Configurable escalation rules. Dependency-free; inlined into n8n Code nodes.
-// Inputs are trusted values from the database (rules, counters) plus the
-// validated classifier/model intents for this turn. The model never decides
-// whether a rule is enabled.
-
-/**
- * @param {{ rules: any, intents?: string[], decision?: string, handoffReason?: string | null, state?: any, handoffPhrase?: string | null }} input
- * @returns {{ handoff: boolean, reason: string | null, suppressed?: string }}
- */
-function evaluateEscalation({ rules, intents, decision, handoffReason, state, handoffPhrase }) {
-  const r = rules || {};
-  const on = (k) => Boolean(r[k] && r[k].enabled);
-  const has = (i) => Array.isArray(intents) && intents.includes(i);
-  const st = state || {};
-
-  if (on('customer_requests_human') && (handoffPhrase === 'explicit' || has('human_request'))) {
-    return { handoff: true, reason: 'customer_requested_human' };
-  }
-  if (on('refund_request') && (has('refund_request') || has('cancellation'))) {
-    return { handoff: true, reason: 'refund_request' };
-  }
-  if (on('unresolved_complaint') && has('complaint')
-      && (st.complaint_turns_24h || 0) + 1 >= ((r.unresolved_complaint && r.unresolved_complaint.complaint_turns) || 2)) {
-    return { handoff: true, reason: 'unresolved_complaint' };
-  }
-  if (on('repeated_failed_answers')
-      && (st.ai_unresolved_turns_24h || 0) >= ((r.repeated_failed_answers && r.repeated_failed_answers.unresolved_turns) || 2)) {
-    return { handoff: true, reason: 'repeated_failed_answers' };
-  }
-  if (on('purchase_intent') && has('purchase_intent')) {
-    return { handoff: true, reason: 'purchase_intent' };
-  }
-  if (decision === 'handoff') {
-    // The model asked for a person. Honour it, except that an
-    // "unavailable information" handoff can be switched off by the owner, in
-    // which case the reply workflow asks the model for a holding answer.
-    if (handoffReason === 'unavailable_information' && !on('unavailable_information')) {
-      return { handoff: false, reason: null, suppressed: 'unavailable_information' };
-    }
-    return { handoff: true, reason: handoffReason || 'other' };
-  }
-  return { handoff: false, reason: null };
-}
-
+// ---- begin shared/escalation.js (isWithinBusinessHours) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Business hours check in the shop's timezone. hours.days: { mon: ['10:00','22:00'], ... }
 function isWithinBusinessHours(hours, now) {
   if (!hours || !hours.days) return true;

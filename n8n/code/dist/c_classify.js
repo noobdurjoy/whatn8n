@@ -3,7 +3,7 @@
 // network error item. A timeout or 5xx is AMBIGUOUS: recorded as 'unknown'
 // and reconciled, never blindly retried (the outbox id is also sent as the
 // Idempotency-Key, so a replay of the same request cannot double-send).
-// ---- begin shared/send-result.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
+// ---- begin shared/send-result.js (classifySendResult) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Classifies a Zernio "send message" HTTP result for the dispatcher.
 // Dependency-free; inlined into the n8n dispatch workflow.
 //
@@ -20,7 +20,6 @@
 // input: { status: number|null, body: object|string|null, headers: object|null,
 //          networkError: string|null }   networkError: 'timeout' | 'reset' | 'refused' | 'dns' | other
 // output: { outcome, provider_message_id, retry_after_seconds, error }
-
 function header(headers, name) {
   if (!headers) return null;
   const k = Object.keys(headers).find((h) => h.toLowerCase() === name);
@@ -75,30 +74,6 @@ function classifySendResult(input) {
     return { outcome: 'ambiguous', provider_message_id: null, retry_after_seconds: null, error: err('provider_5xx') };
   }
   return { outcome: 'rejected_permanent', provider_message_id: null, retry_after_seconds: null, error: err(body.code || 'rejected') };
-}
-
-// Builds the Zernio request body from a claimed outbox row. Only fields the
-// API documents are used; unknown payload keys are dropped.
-/**
- * @param {any} claim
- * @returns {Record<string, any>}
- */
-function buildSendBody(claim) {
-  /** @type {Record<string, any>} */
-  const body = { accountId: claim.provider_account_id };
-  const p = claim.payload || {};
-  if (p.template && typeof p.template.name === 'string') {
-    body.template = { elements: [{ name: p.template.name, language: p.template.language || 'en_US', components: Array.isArray(p.template.components) ? p.template.components : [] }] };
-  } else {
-    if (claim.body) body.message = claim.body;
-    if (p.attachment && typeof p.attachment.url === 'string') {
-      body.attachmentUrl = p.attachment.url;
-      body.attachmentType = ['image', 'video', 'audio', 'file'].includes(p.attachment.type) ? p.attachment.type : 'file';
-      if (p.attachment.filename && body.attachmentType === 'file') body.attachmentName = String(p.attachment.filename).slice(0, 120);
-    }
-    if (p.reply_to && typeof p.reply_to === 'string') body.replyTo = p.reply_to;
-  }
-  return body;
 }
 // ---- end shared/send-result.js ----
 

@@ -1,0 +1,485 @@
+{
+  "name": "WA · A Router",
+  "nodes": [
+    {
+      "id": "a_router-01",
+      "name": "Router Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wa-router",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {
+          "noResponseBody": false
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": null,
+          "name": "WA Internal Token"
+        }
+      },
+      "webhookId": "wa-router"
+    },
+    {
+      "id": "a_router-02",
+      "name": "Plan Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · A Router — \"Plan Route\"\n// Input: the backend's call { event_id, route } (the backend already verified\n// the Zernio signature, stored the event and applied it to the database).\n// Decides which workflows run; every one of them re-checks state in the\n// database, so a repeated or late call is harmless.\n\nconst b = ($input.first().json || {}).body || {};\nconst r = b.route || {};\nconst uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nif (!r.conversation_id || !uuid.test(r.conversation_id)) return [{ json: { valid: false, reason: 'invalid_route' } }];\nconst media = (Array.isArray(r.attachment_ids) ? r.attachment_ids : []).filter((x) => uuid.test(String(x))).slice(0, 10);\nconst isMessage = r.action === 'customer_message';\nreturn [{ json: {\n  valid: true,\n  event_id: b.event_id || null,\n  action: r.action,\n  conversation_id: r.conversation_id,\n  media: media,\n  has_media: media.length > 0,\n  // AI reply: only for customer messages in AUTO/COPILOT without a handoff.\n  // start_ai_job re-checks mode, holds, the AI switch and the revision.\n  ai: isMessage && !r.handoff && (r.mode === 'AUTO' || r.mode === 'COPILOT'),\n  ai_input: isMessage ? { conversation_id: r.conversation_id, message_id: r.message_id, revision: r.revision, possible_handoff: Boolean(r.possible_handoff) } : null,\n  // A handoff queued the one fixed acknowledgement: dispatch it now.\n  dispatch: isMessage && Boolean(r.handoff),\n  notify: (isMessage && Boolean(r.handoff)) || r.action === 'notify_staff',\n  notify_input: { conversation_id: r.conversation_id, reason: r.action === 'notify_staff' ? r.reason : 'customer_requested_human', detail: r.detail || null },\n} }];\n"
+      }
+    },
+    {
+      "id": "a_router-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.valid }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a_router-04",
+      "name": "Has Media?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.has_media }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a_router-05",
+      "name": "Fetch Media",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1040,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "PENDING_a2_media"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "a_router-06",
+      "name": "After Media",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a_router-07",
+      "name": "Route Actions",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1560,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "ai",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Plan Route').first().json.ai }}",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "dispatch",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Plan Route').first().json.dispatch }}",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "notify",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Plan Route').first().json.notify }}",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "allMatchingOutputs": true
+        }
+      }
+    },
+    {
+      "id": "a_router-08",
+      "name": "AI Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1820,
+        0
+      ],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify($('Plan Route').first().json.ai_input) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "a_router-09",
+      "name": "Start AI Reply",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2080,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "PENDING_b_reply"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "a_router-10",
+      "name": "Queued Outbound",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1820,
+        180
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT o.id AS outbound_id FROM (SELECT $1::jsonb AS p) x, app.outbound_messages o\n       WHERE o.conversation_id = (p->>'c')::uuid AND o.status = 'queued' ORDER BY o.created_at LIMIT 5",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify({ c: $('Plan Route').first().json.conversation_id }) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "a_router-11",
+      "name": "Dispatch Queued",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2080,
+        180
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "PENDING_c_dispatch"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "a_router-12",
+      "name": "Notify Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1820,
+        360
+      ],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify($('Plan Route').first().json.notify_input) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "a_router-13",
+      "name": "Notify Staff",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2080,
+        360
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "PENDING_d_notify"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Router Webhook": {
+      "main": [
+        [
+          {
+            "node": "Plan Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Route": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Has Media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Media?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Media",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "After Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Media": {
+      "main": [
+        [
+          {
+            "node": "After Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "After Media": {
+      "main": [
+        [
+          {
+            "node": "Route Actions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Actions": {
+      "main": [
+        [
+          {
+            "node": "AI Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queued Outbound",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Input": {
+      "main": [
+        [
+          {
+            "node": "Start AI Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queued Outbound": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Queued",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Input": {
+      "main": [
+        [
+          {
+            "node": "Notify Staff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

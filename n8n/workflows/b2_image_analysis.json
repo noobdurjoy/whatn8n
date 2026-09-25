@@ -1,0 +1,303 @@
+{
+  "name": "WA · B2 Image Analysis",
+  "nodes": [
+    {
+      "id": "b2_vision-01",
+      "name": "Image Request",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "b2_vision-02",
+      "name": "Load Image",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.ai_job_is_current(q.j) AS cur, app.setting('vision') AS vision, app.setting('models') AS models,\n         (SELECT body FROM app.prompt_versions WHERE name = 'vision_system' AND status = 'published') AS prompt,\n         app.ai_budget_status() AS budget,\n         app.find_image_analysis(q.a, app.setting('models') ->> 'vision_model', coalesce(app.setting('vision') ->> 'prompt_version', 'vision-v1')) AS reuse,\n         (SELECT to_jsonb(t) FROM app.get_attachment_for_job(q.j, q.a) t) AS att\n       FROM (SELECT (p->>'job_id')::uuid AS j, (p->>'attachment_id')::uuid AS a FROM (SELECT $1::jsonb AS p) x) q",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify({ job_id: $json.job_id, attachment_id: $json.args && $json.args.attachment_id }) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "b2_vision-03",
+      "name": "Prepare Vision Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · B2 Image Analysis — \"Prepare Vision Request\"\n// Input: one row from \"Load Image\" { cur, vision, models, prompt, budget, reuse, att }.\n// The image bytes come from our own database (downloaded earlier through the\n// authenticated Zernio media endpoint) and go to the model as a base64 data\n// URL. No provider URL, filename or credential is ever put in the prompt, and\n// no URL from the customer's message or the image is fetched.\n// Output: { route: 'call', request, meta } or { route: 'done', final }.\n\nconst call = $('Image Request').first().json;\nconst row = $input.first().json || {};\nconst vision = row.vision || {};\nconst models = row.models || {};\nconst model = models.vision_model;\nconst promptVersion = vision.prompt_version || 'vision-v1';\nconst question = String((call.args && call.args.question) || '').slice(0, 500);\nconst attachmentId = call.args && call.args.attachment_id;\n\nfunction done(error, extra) {\n  return [{ json: { route: 'done', final: Object.assign({ ok: false, ref: null, result: null, reused: false, attempted: false, usage: null, error: error }, extra || {}) } }];\n}\n\n// Staleness: a takeover or a newer customer message ends the job; no analysis\n// is started for a job that is no longer current.\nif (!row.cur || !row.cur.current) return done('job_not_current');\nif (vision.enabled === false) return done('image_analysis_disabled');\nif (!model) return done('vision_model_not_configured');\nif (row.budget && row.budget.within_budget === false) return done('ai_budget_reached');\n\n// Same image, same model, same prompt version: reuse the stored observations.\nif (row.reuse && row.reuse.status === 'ok' && row.reuse.result) {\n  return done(null, { ok: true, ref: 'img:' + row.reuse.analysis_id, result: row.reuse.result, reused: true });\n}\n\nconst att = row.att;\nif (!att || !att.data_base64) return done('image_not_available');\nconst allowed = Array.isArray(vision.allowed_mime_types) && vision.allowed_mime_types.length ? vision.allowed_mime_types : ['image/jpeg', 'image/png', 'image/webp'];\nif (allowed.indexOf(att.mime_type) < 0) return done('unsupported_image_type');\nconst maxBytes = Number(vision.max_image_bytes) || 5 * 1024 * 1024;\nif (!att.size_bytes || Number(att.size_bytes) > maxBytes) return done('image_too_large');\n\nconst lang = { bn: 'Bangla', en: 'English', banglish: 'Banglish' };\nconst text = [\n  'Question from the support assistant: ' + (question || 'Describe what the customer is showing.'),\n  'Customer language: ' + (lang[call.customer_language] || 'unknown') + '. Transcribe Bangla text in Bangla script.',\n  'Return only the JSON object described in your instructions.',\n].join('\\n');\n\nconst request = {\n  model: model,\n  messages: [\n    { role: 'system', content: String(row.prompt || '') },\n    // Text part first, then the image part (raw HTTP shape: image_url).\n    { role: 'user', content: [\n      { type: 'text', text: text },\n      { type: 'image_url', image_url: { url: 'data:' + att.mime_type + ';base64,' + att.data_base64 } },\n    ] },\n  ],\n  response_format: { type: 'json_object' },\n  max_tokens: models.vision_max_tokens || 1200,\n  temperature: 0.1,\n  provider: { require_parameters: true },\n};\n\nreturn [{ json: { route: 'call', request: request, meta: {\n  job_id: call.job_id, attachment_id: attachmentId, model: model, prompt_version: promptVersion,\n  question: question, sha256: att.sha256_hex, started_at: Date.now(),\n} } }];\n"
+      }
+    },
+    {
+      "id": "b2_vision-04",
+      "name": "Vision Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        780,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "call",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "call"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "done",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "done"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b2_vision-05",
+      "name": "Call Vision Model",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpTemplatedCustomAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Title",
+              "value": "WA Support"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 90000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpTemplatedCustomAuth": {
+          "id": "3eVm7qPU029dwM3k",
+          "name": "Simplified Custom Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b2_vision-06",
+      "name": "Validate Vision Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · B2 Image Analysis — \"Validate Vision Result\"\n// Input: the buffered OpenRouter response (streaming is not used; a partial\n// or truncated result is discarded). The observations are validated on the\n// server; anything malformed becomes a failed analysis, never a guess.\n// Usage fields that the provider did not return stay null (unavailable).\n// ---- begin shared/validate.js (parseModelJson, validateVisionResult, extractUsage) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----\nfunction isPlainObject(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }\n\n// Pull the first JSON object out of a model message. Accepts a bare object or\n// one wrapped in a ```json fence; anything else is a failure, not a guess.\nfunction parseModelJson(content) {\n  if (isPlainObject(content)) return { ok: true, value: content };\n  if (typeof content !== 'string') return { ok: false, error: 'no_content' };\n  let s = content.trim();\n  const fence = s.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);\n  if (fence) s = fence[1].trim();\n  if (!s.startsWith('{') || !s.endsWith('}')) return { ok: false, error: 'not_a_json_object' };\n  try {\n    const v = JSON.parse(s);\n    return isPlainObject(v) ? { ok: true, value: v } : { ok: false, error: 'not_a_json_object' };\n  } catch (e) {\n    return { ok: false, error: 'invalid_json' };\n  }\n}\n\nconst IMAGE_TYPES = ['product_photo', 'error_screenshot', 'payment_receipt', 'order_screenshot', 'chat_screenshot', 'document', 'other', 'unclear'];\n\nconst REF_KINDS = ['product', 'order_number', 'transaction_id', 'amount', 'error_code', 'other'];\n\nfunction cleanStrList(v, maxItems, maxLen) {\n  if (!Array.isArray(v)) return null;\n  const out = [];\n  for (const x of v.slice(0, maxItems)) {\n    if (typeof x !== 'string') return null;\n    const t = x.trim();\n    if (t) out.push(t.slice(0, maxLen));\n  }\n  return out;\n}\n\n// Validates the vision model's observation object. Returns a normalized copy\n// or errors; an invalid result is recorded as a failed analysis, never used.\n/**\n * @param {any} raw\n * @returns {{ ok: boolean, errors?: string[], value?: any }}\n */\nfunction validateVisionResult(raw) {\n  const errors = [];\n  if (!isPlainObject(raw)) return { ok: false, errors: ['not_an_object'] };\n  if (!IMAGE_TYPES.includes(raw.image_type)) errors.push('invalid_image_type');\n  const visible = cleanStrList(raw.visible_details, 12, 200);\n  if (visible === null) errors.push('invalid_visible_details');\n  const unreadable = cleanStrList(raw.unreadable_areas, 12, 200);\n  if (unreadable === null) errors.push('invalid_unreadable_areas');\n  const uncertain = cleanStrList(raw.uncertainties, 12, 200);\n  if (uncertain === null) errors.push('invalid_uncertainties');\n  let texts = [];\n  if (!Array.isArray(raw.extracted_text)) errors.push('invalid_extracted_text');\n  else {\n    for (const t of raw.extracted_text.slice(0, 20)) {\n      if (!isPlainObject(t) || typeof t.text !== 'string') { errors.push('invalid_extracted_text_item'); break; }\n      texts.push({ text: t.text.trim().slice(0, 500), language: ['bn', 'en', 'other'].includes(t.language) ? t.language : 'other' });\n    }\n  }\n  let refs = [];\n  if (!Array.isArray(raw.references)) errors.push('invalid_references');\n  else {\n    for (const r of raw.references.slice(0, 12)) {\n      if (!isPlainObject(r) || typeof r.value !== 'string') { errors.push('invalid_reference_item'); break; }\n      refs.push({ kind: REF_KINDS.includes(r.kind) ? r.kind : 'other', value: r.value.trim().slice(0, 120) });\n    }\n  }\n  if (typeof raw.suggested_next_step !== 'string') errors.push('invalid_suggested_next_step');\n  if (errors.length) return { ok: false, errors };\n\n  // Secrets that slipped into transcriptions are removed, not trusted.\n  const scrub = (s) => s.replace(/\\b\\d{4,8}\\b(?=[^\\d]*(?:otp|code|কোড))/gi, '[hidden]');\n  const hasSubstance = (visible && visible.length) || texts.length || refs.length;\n  return {\n    ok: true,\n    value: {\n      image_type: raw.image_type,\n      visible_details: visible.map(scrub),\n      extracted_text: texts.map((t) => ({ text: scrub(t.text), language: t.language })),\n      references: refs,\n      unreadable_areas: unreadable,\n      uncertainties: uncertain,\n      suggested_next_step: raw.suggested_next_step.trim().slice(0, 300),\n      // Nothing usable was observed: treat as unreadable, ask for a clearer image.\n      readable: Boolean(hasSubstance) && raw.image_type !== 'unclear',\n      // Receipts are references to check, never proof of payment.\n      payment_proof: false,\n    },\n  };\n}\n\n// Reduce OpenRouter's response metadata to what we store. Missing usage stays\n// null (\"unavailable\"), never 0.\nfunction extractUsage(resp, model, latencyMs) {\n  const u = resp && resp.usage;\n  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);\n  return {\n    model: (resp && resp.model) || model,\n    provider: (resp && resp.provider) || null,\n    request_id: (resp && resp.id) || null,\n    latency_ms: typeof latencyMs === 'number' ? Math.round(latencyMs) : null,\n    prompt_tokens: u ? num(u.prompt_tokens) : null,\n    completion_tokens: u ? num(u.completion_tokens) : null,\n    reasoning_tokens: u && u.completion_tokens_details ? num(u.completion_tokens_details.reasoning_tokens) : null,\n    cost_usd: u ? num(u.cost) : null,\n  };\n}\n// ---- end shared/validate.js ----\n\nconst prep = $('Prepare Vision Request').first().json;\nconst meta = prep.meta;\nconst resp = $input.first().json || {};\nconst usage = extractUsage(resp, meta.model, Date.now() - meta.started_at);\nusage.purpose = 'vision';\n\nconst httpError = resp.error ? (typeof resp.error === 'object' ? (resp.error.message || JSON.stringify(resp.error)) : String(resp.error)) : null;\nconst choice = resp.choices && resp.choices[0];\nlet status = 'failed';\nlet result = null;\nlet error = null;\n\nif (httpError || !choice) {\n  error = 'model_error: ' + String(httpError || 'no_choices').slice(0, 300);\n} else if (choice.finish_reason === 'length') {\n  error = 'incomplete_output';\n} else {\n  const parsed = parseModelJson(choice.message && choice.message.content);\n  if (!parsed.ok) {\n    status = 'invalid_output';\n    error = 'invalid_json';\n  } else {\n    const v = validateVisionResult(parsed.value);\n    if (!v.ok) { status = 'invalid_output'; error = 'invalid_observations: ' + v.errors.join(','); }\n    else if (!v.value.readable) { status = 'unreadable'; result = v.value; error = 'image_unreadable'; }\n    else { status = 'ok'; result = v.value; }\n  }\n}\nusage.outcome = status === 'ok' || status === 'unreadable' ? 'ok'\n  : status === 'invalid_output' ? 'invalid_output'\n  : error === 'incomplete_output' ? 'incomplete' : 'error';\nif (error) usage.error = error.slice(0, 500);\n\nreturn [{ json: { status: status, result: result, error: error, usage: usage, meta: meta } }];\n"
+      }
+    },
+    {
+      "id": "b2_vision-07",
+      "name": "Store Analysis",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1560,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH v AS (SELECT $1::jsonb AS v), u AS (SELECT app.record_ai_usage((v->'meta'->>'job_id')::uuid, 'vision', v->'usage') AS id FROM v)\n       SELECT app.store_image_analysis((v->'meta'->>'job_id')::uuid, (v->'meta'->>'attachment_id')::uuid, v->'meta'->>'model', v->'meta'->>'prompt_version',\n                v->'meta'->>'question', v->>'status', nullif(v->'result', 'null'::jsonb), v->>'error', (SELECT id FROM u)) AS analysis_id,\n              app.ai_job_is_current((v->'meta'->>'job_id')::uuid) AS cur\n       FROM v",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "b2_vision-08",
+      "name": "Vision Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// WA · B2 Image Analysis — \"Vision Output\"\n// Last node of the sub-workflow; its item is what the Tool Runner receives:\n// { ok, ref, result, reused, attempted, usage, error }.\n// The vision model's output is only returned as observations. It never sends\n// a message or triggers an order action; the reply model uses it, and the\n// usual validation and dispatch checks still apply.\n\nconst inp = $input.first().json || {};\nif (inp.final) return [{ json: inp.final }];\n\nconst v = $('Validate Vision Result').first().json;\nconst stored = inp; // { analysis_id, cur } from \"Store Analysis\"\nconst current = stored.cur && stored.cur.current;\nconst out = { ok: false, ref: null, result: null, reused: false, attempted: true, usage: null, error: v.error };\n// Usage was recorded by \"Store Analysis\"; it is not returned again to avoid\n// double counting in the reply job.\nif (!current) {\n  // A takeover or a newer message arrived during analysis: the stored result\n  // can be reused later, but this job must not use it.\n  out.error = 'job_not_current';\n} else if (v.status === 'ok') {\n  out.ok = true;\n  out.ref = 'img:' + stored.analysis_id;\n  out.result = v.result;\n  out.error = null;\n}\nreturn [{ json: out }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Image Request": {
+      "main": [
+        [
+          {
+            "node": "Load Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Image": {
+      "main": [
+        [
+          {
+            "node": "Prepare Vision Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Vision Request": {
+      "main": [
+        [
+          {
+            "node": "Vision Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Route": {
+      "main": [
+        [
+          {
+            "node": "Call Vision Model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vision Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Vision Model": {
+      "main": [
+        [
+          {
+            "node": "Validate Vision Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Vision Result": {
+      "main": [
+        [
+          {
+            "node": "Store Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Analysis": {
+      "main": [
+        [
+          {
+            "node": "Vision Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

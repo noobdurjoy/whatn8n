@@ -3,11 +3,12 @@
 // customer's stated preferences stay scoped to that conversation's customer;
 // nothing here goes into the shared knowledge base. Secrets are removed
 // before the text reaches the model.
-// @include shared/redact.js
+// @include shared/redact.js: redactSecretsText
 
 const row = $input.first().json || {};
 const inp = row.inp || {};
 const models = row.models || {};
+if (row.budget && row.budget.within_budget === false) return [{ json: { skip: true, reason: 'ai_budget_reached' } }];
 const msgs = Array.isArray(inp.messages) ? inp.messages : [];
 if (!inp.conversation_id || !msgs.length || !models.summary_model) return [{ json: { skip: true, reason: 'nothing_to_summarize' } }];
 const lines = msgs.map((m) => '[' + m.id + '] ' + m.role + ': ' + redactSecretsText(String(m.text || '')).slice(0, 800));

@@ -5,7 +5,7 @@
 // to by short run-local references only. Raw private chats are never copied
 // into the shared knowledge base: the output is only a set of proposals that
 // the owner must approve.
-// ---- begin shared/redact.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
+// ---- begin shared/redact.js (redactPersonal) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Redaction helpers. Dependency-free; inlined into n8n Code nodes.
 //
 // redactSecrets: applied to EVERYTHING before it reaches a model, a log line
@@ -13,7 +13,6 @@
 //   login/token links.
 // redactPersonal: additionally applied before conversation text enters the
 //   daily-learning review: phones, emails, order numbers, transaction ids.
-
 function luhnValid(digits) {
   let sum = 0;
   let dbl = false;
@@ -27,6 +26,7 @@ function luhnValid(digits) {
 }
 
 const BN_DIGITS = '০১২৩৪৫৬৭৮৯';
+
 function asciiDigits(s) {
   return s.replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)));
 }
@@ -98,6 +98,7 @@ function redactPersonal(input) {
 const row = $input.first().json || {};
 const cands = Array.isArray(row.cands) ? row.cands : [];
 const models = row.models || {};
+if (row.budget && row.budget.within_budget === false) return [{ json: { skip: true, reason: 'ai_budget_reached' } }];
 if (!cands.length || !models.chat_model) return [{ json: { skip: true, reason: 'no_candidates' } }];
 
 const refs = {};

@@ -34,4 +34,6 @@ const lines = ['WhatsApp support: ' + title];
 if (f.customer) lines.push('Customer: ' + String(f.customer).slice(0, 60));
 if (f.mode) lines.push('Mode: ' + f.mode + (f.assigned_to ? ' · assigned to ' + f.assigned_to : ' · unassigned'));
 if (dash && conv) lines.push(dash + '/?c=' + conv);
-return [{ json: { chat_id: String(notify.telegram_chat_id), text: lines.join('\n').slice(0, 1000), alert_id: alert ? alert.id : null } }];
+// Telegram parses HTML: escape everything we did not write ourselves.
+const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+return [{ json: { chat_id: String(notify.telegram_chat_id), text: esc(lines.join('\n').slice(0, 1000)), alert_id: alert ? alert.id : null } }];

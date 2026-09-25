@@ -4,7 +4,7 @@
 // the request from the node that ran just before the model call, records
 // usage (missing usage stays null = unavailable), and decides: run tools,
 // or go to validation. Streaming is not used: the whole response is buffered.
-// @include shared/validate.js
+// @include shared/validate.js: parseModelJson, extractUsage
 
 const ROUND = '__VARIANT__';
 const PREV = { R1: 'Prepare Turn', R2: 'R1 Collect Tool Results', R3: 'R2 Collect Tool Results', R4: 'Build Repair Request' }[ROUND];

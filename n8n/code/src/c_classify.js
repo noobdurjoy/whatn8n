@@ -3,7 +3,7 @@
 // network error item. A timeout or 5xx is AMBIGUOUS: recorded as 'unknown'
 // and reconciled, never blindly retried (the outbox id is also sent as the
 // Idempotency-Key, so a replay of the same request cannot double-send).
-// @include shared/send-result.js
+// @include shared/send-result.js: classifySendResult
 
 const s = $('Send Ready').first().json;
 const r = $input.first().json || {};

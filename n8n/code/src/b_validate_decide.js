@@ -3,8 +3,8 @@
 // escalation rules. The model never decides permissions: an invalid output
 // gets ONE repair attempt; if it is still invalid the job hands off (AUTO)
 // or fails (drafts), and nothing unvalidated is ever sent.
-// @include shared/validate.js
-// @include shared/escalation.js
+// @include shared/validate.js: parseModelJson, validateReply
+// @include shared/escalation.js: evaluateEscalation
 
 const state = JSON.parse(JSON.stringify($input.first().json.state));
 const staffAssist = state.kind !== 'reply';

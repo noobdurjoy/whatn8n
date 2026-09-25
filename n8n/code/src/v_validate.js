@@ -3,7 +3,7 @@
 // or truncated result is discarded). The observations are validated on the
 // server; anything malformed becomes a failed analysis, never a guess.
 // Usage fields that the provider did not return stay null (unavailable).
-// @include shared/validate.js
+// @include shared/validate.js: parseModelJson, validateVisionResult, extractUsage
 
 const prep = $('Prepare Vision Request').first().json;
 const meta = prep.meta;

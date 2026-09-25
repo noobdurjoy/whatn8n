@@ -2,7 +2,7 @@
 // Input: the response of the presigned PUT. On success the outbox payload
 // gets the public URL (app.set_outbound_media_url, next node) and the send
 // continues; on failure the attempt is recorded as retryable.
-// @include shared/send-result.js
+// @include shared/send-result.js: buildSendBody
 
 const b = $('Build Send').first().json;
 const prep = $('Prepare Upload').first().json;

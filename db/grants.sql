@@ -57,7 +57,7 @@ BEGIN
       app.overdue_conversations(), app.apply_retention(), app.record_health(text, text, jsonb),
       app.unknown_sends_for_reconcile(), app.attach_reconcile_evidence(uuid, jsonb), app.pending_attachments(uuid[]),
       app.notification_facts(uuid), app.upsert_woo_order_ref(jsonb), app.upsert_woo_products(jsonb),
-      app.get_webhook_event(uuid), app.due_outbound(integer),
+      app.get_webhook_event(uuid), app.due_outbound(integer), app.history_import_targets(integer),
       app.setting(text), app.setting_bool(text, boolean), app.setting_int(text, integer)
     TO wa_n8n;
     -- Read access needed by the workflows, and the WooCommerce sync tables.

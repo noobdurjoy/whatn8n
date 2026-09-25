@@ -3,8 +3,8 @@
 // customer stated, with a known key and a source message from that customer,
 // are kept (the database checks the source again). Values with secrets are
 // dropped, not stored.
-// @include shared/validate.js
-// @include shared/redact.js
+// @include shared/validate.js: parseModelJson, extractUsage
+// @include shared/redact.js: redactSecrets, redactSecretsText
 
 const meta = $('Prepare Summary Request').first().json.meta;
 const resp = $input.first().json || {};

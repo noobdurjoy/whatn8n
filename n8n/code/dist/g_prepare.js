@@ -3,7 +3,7 @@
 // customer's stated preferences stay scoped to that conversation's customer;
 // nothing here goes into the shared knowledge base. Secrets are removed
 // before the text reaches the model.
-// ---- begin shared/redact.js (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
+// ---- begin shared/redact.js (redactSecretsText) (inlined by n8n/build.mjs; edit the shared file, not this copy) ----
 // Redaction helpers. Dependency-free; inlined into n8n Code nodes.
 //
 // redactSecrets: applied to EVERYTHING before it reaches a model, a log line
@@ -11,7 +11,6 @@
 //   login/token links.
 // redactPersonal: additionally applied before conversation text enters the
 //   daily-learning review: phones, emails, order numbers, transaction ids.
-
 function luhnValid(digits) {
   let sum = 0;
   let dbl = false;
@@ -25,6 +24,7 @@ function luhnValid(digits) {
 }
 
 const BN_DIGITS = '০১২৩৪৫৬৭৮৯';
+
 function asciiDigits(s) {
   return s.replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)));
 }
@@ -96,6 +96,7 @@ function redactPersonal(input) {
 const row = $input.first().json || {};
 const inp = row.inp || {};
 const models = row.models || {};
+if (row.budget && row.budget.within_budget === false) return [{ json: { skip: true, reason: 'ai_budget_reached' } }];
 const msgs = Array.isArray(inp.messages) ? inp.messages : [];
 if (!inp.conversation_id || !msgs.length || !models.summary_model) return [{ json: { skip: true, reason: 'nothing_to_summarize' } }];
 const lines = msgs.map((m) => '[' + m.id + '] ' + m.role + ': ' + redactSecretsText(String(m.text || '')).slice(0, 800));

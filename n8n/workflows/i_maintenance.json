@@ -1,0 +1,619 @@
+{
+  "name": "WA · I Maintenance",
+  "nodes": [
+    {
+      "id": "i_maintenance-01",
+      "name": "Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-02",
+      "name": "Expire Leases",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.expire_send_leases() AS expired, app.record_health('n8n_maintenance', 'ok', jsonb_build_object('at', now())) IS NULL AS health",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-03",
+      "name": "Claim Alerts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE app.alerts SET notified_at = now() WHERE id IN (\n         SELECT id FROM app.alerts WHERE resolved_at IS NULL AND notified_at IS NULL ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED)\n       RETURNING id, kind, severity, message, details",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "i_maintenance-04",
+      "name": "Alert Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        780,
+        0
+      ],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify({ alert: $json, reason: $json.kind }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "i_maintenance-05",
+      "name": "Notify Alert",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1040,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "PENDING_d_notify"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-06",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        180
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-07",
+      "name": "Overdue Reminders",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        180
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(app.raise_alert('response_overdue', 'info', 'A customer is waiting past the response target.',\n         jsonb_build_object('conversation_id', x->>'conversation_id'), 'overdue:' || (x->>'conversation_id') || ':' || (x->>'due_at'))) AS raised\n       FROM jsonb_array_elements(app.overdue_conversations()) x",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-08",
+      "name": "Pending Media",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        360
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT jsonb_agg(x->'attachment_id') AS attachment_ids FROM jsonb_array_elements(app.pending_attachments(NULL)) x HAVING count(*) > 0",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "i_maintenance-09",
+      "name": "Retry Media",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        520,
+        180
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "PENDING_a2_media"
+        },
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-10",
+      "name": "Unknown Sends",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        540
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT x->>'outbound_id' AS outbound_id, x->>'body' AS body, x->>'created_at' AS created_at,\n         x->>'provider_conversation_id' AS provider_conversation_id, x->>'provider_account_id' AS provider_account_id\n       FROM jsonb_array_elements(app.unknown_sends_for_reconcile()) x",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "i_maintenance-11",
+      "name": "Reconcile Each",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        520,
+        360
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $workflow.id }}"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-12",
+      "name": "Unknown Send",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        360
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "i_maintenance-13",
+      "name": "List Provider Messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        720
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://zernio.com/api/v1/inbox/conversations/' + encodeURIComponent($json.provider_conversation_id) + '/messages' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "accountId",
+              "value": "={{ $json.provider_account_id }}"
+            },
+            {
+              "name": "limit",
+              "value": "50"
+            },
+            {
+              "name": "sortOrder",
+              "value": "desc"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "NAWZ1V27MYMGkozE",
+          "name": "Custom Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "i_maintenance-14",
+      "name": "Match Unknown Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        540
+      ],
+      "parameters": {
+        "jsCode": "// WA · I Maintenance — \"Match Unknown Send\"\n// Input: the conversation's recent messages from Zernio for ONE send whose\n// outcome is unknown (timeout or 5xx). Exactly one outgoing message with the\n// same text, sent after the outbox row was created, is provider evidence and\n// resolves the send as sent. Anything else is attached to the alert for a\n// person to decide; nothing is re-sent automatically.\n\nconst u = $('Unknown Send').first().json;\nconst r = $input.first().json || {};\nconst status = typeof r.statusCode === 'number' ? r.statusCode : null;\nif (r.error || status === null || status < 200 || status >= 300) {\n  return [{ json: { action: 'evidence', outbound_id: u.outbound_id, evidence: { error: 'provider_lookup_failed', http_status: status } } }];\n}\nconst body = typeof r.body === 'string' ? JSON.parse(r.body) : (r.body || {});\nconst created = Date.parse(u.created_at) - 60 * 1000;\nconst norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();\nconst want = norm(u.body);\nconst candidates = (Array.isArray(body.messages) ? body.messages : [])\n  .filter((m) => m.direction === 'outgoing' && Date.parse(m.createdAt) >= created)\n  .map((m) => ({ id: m.id, created_at: m.createdAt, same_text: want !== '' && norm(m.message) === want }));\nconst exact = candidates.filter((c) => c.same_text);\nif (exact.length === 1 && exact[0].id) {\n  return [{ json: { action: 'resolve', outbound_id: u.outbound_id, provider_message_id: exact[0].id,\n    evidence: { method: 'provider_message_list_exact_text', candidate: exact[0], checked_at: new Date().toISOString() } } }];\n}\nreturn [{ json: { action: 'evidence', outbound_id: u.outbound_id, evidence: { candidates: candidates.slice(0, 10), exact_matches: exact.length } } }];\n"
+      }
+    },
+    {
+      "id": "i_maintenance-15",
+      "name": "Reconcile Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        780,
+        180
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "resolve",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "resolve"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "evidence",
+              "renameOutput": true,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "evidence"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "i_maintenance-16",
+      "name": "Resolve Send",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1040,
+        180
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.resolve_unknown_send((p->>'outbound_id')::uuid, 'mark_sent', NULL, p->>'provider_message_id', p->'evidence') AS r FROM (SELECT $1::jsonb AS p) x",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-17",
+      "name": "Attach Evidence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1040,
+        360
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.attach_reconcile_evidence((p->>'outbound_id')::uuid, p->'evidence') AS ok FROM (SELECT $1::jsonb AS p) x",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json) }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-18",
+      "name": "Daily 04:10",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        540
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 4,
+              "triggerAtMinute": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "i_maintenance-19",
+      "name": "Apply Retention",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        260,
+        900
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT app.apply_retention() AS r",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": null,
+          "name": "WA Postgres (wa_n8n)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Minute": {
+      "main": [
+        [
+          {
+            "node": "Expire Leases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expire Leases": {
+      "main": [
+        [
+          {
+            "node": "Claim Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Alerts": {
+      "main": [
+        [
+          {
+            "node": "Alert Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Input": {
+      "main": [
+        [
+          {
+            "node": "Notify Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Overdue Reminders",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Pending Media",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Unknown Sends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pending Media": {
+      "main": [
+        [
+          {
+            "node": "Retry Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unknown Sends": {
+      "main": [
+        [
+          {
+            "node": "Reconcile Each",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unknown Send": {
+      "main": [
+        [
+          {
+            "node": "List Provider Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Provider Messages": {
+      "main": [
+        [
+          {
+            "node": "Match Unknown Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match Unknown Send": {
+      "main": [
+        [
+          {
+            "node": "Reconcile Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reconcile Route": {
+      "main": [
+        [
+          {
+            "node": "Resolve Send",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Attach Evidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 04:10": {
+      "main": [
+        [
+          {
+            "node": "Apply Retention",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "timezone": "Asia/Dhaka"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

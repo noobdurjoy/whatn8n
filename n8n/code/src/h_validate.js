@@ -3,8 +3,8 @@
 // revisions only of existing entries, evidence only from this run, and the
 // text is redacted again. A proposal that still carries personal data,
 // prices or order numbers is dropped. Proposals wait for owner approval.
-// @include shared/validate.js
-// @include shared/redact.js
+// @include shared/validate.js: parseModelJson, extractUsage
+// @include shared/redact.js: redactPersonal
 
 const meta = $('Prepare Learning Request').first().json.meta;
 const resp = $input.first().json || {};
@@ -34,7 +34,7 @@ for (const p of list) {
     evidence: { conversation_ids: evidence },
     redaction: { method: 'redactPersonal', checked_at: new Date().toISOString() },
     run: meta.run,
-  } } });
+  }, usage: usage } });
 }
-// Usage is recorded once per run by "Record Learning Usage".
-return out.length ? out : [{ json: { proposal: null } }];
+// Usage is recorded once per run by "Record Learning Usage" (first item).
+return out.length ? out : [{ json: { proposal: null, usage: usage } }];
