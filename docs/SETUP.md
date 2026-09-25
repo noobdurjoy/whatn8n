@@ -27,7 +27,7 @@ openssl rand -hex 32      # generate each secret/token separately
 
 That server already runs n8n in Docker (network `n8n_default`), another PostgreSQL on `127.0.0.1:5432`, another app on `:3000`, and nginx on ports 80/443. `deploy/vps/install.sh` fits around them:
 - Docker project `ids-wa`; the database publishes no port and joins `n8n_default` as `ids-wa-db`;
-- the dashboard listens on `127.0.0.1:3100`;
+- the dashboard listens on a free local port (3110–3199, stored as `IDS_APP_PORT` in `.compose.env`);
 - the nginx site `support.wamsg.site` gets HTTPS from certbot.
 
 It generates every secret on the server and asks for the owner login. It writes the values for the last three n8n credentials to `n8n-credentials.txt` (mode 600). It is safe to run again.

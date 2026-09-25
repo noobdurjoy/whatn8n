@@ -14,7 +14,6 @@ set -euo pipefail
 DOMAIN=support.wamsg.site
 N8N_WEBHOOK_BASE=https://n8n.wamsg.site/webhook
 N8N_NETWORK=n8n_default
-APP_PORT=3100
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
@@ -31,6 +30,15 @@ if [ ! -f .compose.env ]; then
   echo "POSTGRES_SUPERUSER_PASSWORD=$(rand)" > .compose.env
   echo "created .compose.env"
 fi
+# Local port for the dashboard: chosen once, from those not in use on this host.
+if ! grep -q '^IDS_APP_PORT=' .compose.env; then
+  for p in $(seq 3110 3199); do
+    ss -ltnH "( sport = :$p )" | grep -q . || { echo "IDS_APP_PORT=$p" >> .compose.env; break; }
+  done
+fi
+APP_PORT=$(sed -n 's/^IDS_APP_PORT=//p' .compose.env)
+[ -n "$APP_PORT" ] || { echo "No free port found in 3110-3199."; exit 1; }
+echo "dashboard port: 127.0.0.1:${APP_PORT}"
 if [ ! -f .env ]; then
   APP_PW=$(rand 24); N8N_PW=$(rand 24)
   cat > .env <<EOF
@@ -103,7 +111,7 @@ curl -fsS "http://127.0.0.1:${APP_PORT}/api/health" && echo
 say "nginx + HTTPS for ${DOMAIN}"
 SITE=/etc/nginx/sites-available/${DOMAIN}
 if [ ! -f "$SITE" ]; then
-  cp deploy/vps/nginx-support.conf "$SITE"
+  sed "s/__APP_PORT__/${APP_PORT}/" deploy/vps/nginx-support.conf > "$SITE"
   ln -sf "$SITE" /etc/nginx/sites-enabled/${DOMAIN}
   nginx -t
   systemctl reload nginx

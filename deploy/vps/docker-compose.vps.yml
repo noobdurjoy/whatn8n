@@ -3,7 +3,8 @@
 #     -f docker-compose.yml -f deploy/vps/docker-compose.vps.yml ...
 # That host already runs another PostgreSQL on 127.0.0.1:5432 and another
 # Next.js app on :3000, so this stack publishes no database port and puts the
-# dashboard on 127.0.0.1:3100 (nginx proxies support.wamsg.site to it).
+# dashboard on a free local port, IDS_APP_PORT in .compose.env (install.sh
+# picks one; nginx proxies support.wamsg.site to it).
 # n8n runs in Docker on the network "n8n_default"; the database joins that
 # network under the alias "ids-wa-db", so only containers on it (n8n) can
 # reach it, and never from the internet.
@@ -17,7 +18,7 @@ services:
 
   app:
     ports: !override
-      - "127.0.0.1:3100:3000"
+      - "127.0.0.1:${IDS_APP_PORT:?set IDS_APP_PORT}:3000"
 
 networks:
   n8n:
