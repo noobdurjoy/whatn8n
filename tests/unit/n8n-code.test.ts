@@ -470,3 +470,15 @@ describe('workflow expressions', () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe('Telegram reply variants', () => {
+  const up = { r: { update_id: 7, chat_id: 42 }, dash: 'https://dash.example' };
+  it('every variant name in code matches its file (no silent empty replies)', async () => {
+    const [c] = await run('tg_reply.cancel_notice.js', { r: { ok: true, canceled: 1 } }, { 'Accept Update': up });
+    expect(c.json.text).toBe('✅ Temporary notice removed.');
+    for (const f of readdirSync(dist).filter((x) => x.startsWith('tg_reply.'))) {
+      const kind = f.slice('tg_reply.'.length, -3);
+      expect(readFileSync(path.join(dist, f), 'utf8'), f).toContain("const KIND = '" + kind + "'");
+    }
+  });
+});

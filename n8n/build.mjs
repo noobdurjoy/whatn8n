@@ -81,7 +81,8 @@ export async function buildAll() {
     for (const v of variants) {
       const name = v ? f.replace(/\.js$/, `.${v}.js`) : f;
       let code = await inlineShared(src.replace(/^\/\/ @variants .+\n/m, ''));
-      if (v) code = code.split('__VARIANT__').join(v.replace(/_/g, ' '));
+      // In code ('__VARIANT__') the exact name; elsewhere (the header) readable.
+      if (v) code = code.split("'__VARIANT__'").join("'" + v + "'").split('__VARIANT__').join(v.replace(/_/g, ' '));
       built[name] = code.trim() + '\n';
       await writeFile(path.join(outDir, name), built[name]);
     }

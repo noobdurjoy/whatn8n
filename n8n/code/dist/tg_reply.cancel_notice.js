@@ -15,7 +15,7 @@ function formatDhaka(iso) {
 }
 // ---- end shared/admin-commands.js ----
 
-const KIND = 'cancel notice';
+const KIND = 'cancel_notice';
 const up = $('Accept Update').first().json;
 const r = up.r || {};
 const dash = String(up.dash || '').replace(/\/+$/, '');
