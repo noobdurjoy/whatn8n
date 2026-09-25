@@ -14,7 +14,8 @@ No other test results are claimed.
 | OpenRouter chat model `deepseek/deepseek-v4.1-flash` | Real calls through an n8n OpenRouter credential. Tool calling with the allowlisted tools worked, final answers came back as structured JSON, and usage and cost fields were returned. These ran before the dedicated **IDS OpenRouter** key existed, so they must be repeated with that key (connection check, below) |
 | OpenRouter vision model `qwen/qwen3.7-flash` | A real image was sent as a base64 data URL with the vision prompt. It returned valid JSON observations, which the vision validator accepted. Same caveat about the key |
 | WooCommerce Store API (public) | Product search, product details and variations for infinitydigitalshop.com, fetched from n8n. Confirmed facts: <ul><li>prices are in minor units (BDT, 2 decimals);</li><li>variation items carry `parent` and `variation`, with empty `attributes`;</li><li>`add_to_cart.url` has the exact variation query.</li></ul> |
-| Workflow upload | The single workflow **Infinity Digital Shop — WhatsApp AI Support** exists on `n8n.wamsg.site` as `CAUTLyiBxlIyAydL`, **unpublished**. It has 288 of the 292 generated nodes. The four Telegram nodes (Telegram Trigger and the three Telegram send nodes) are held back until the **IDS Telegram Admin** credential exists. The reason: n8n auto-binds any existing credential of a matching type, and the only Telegram credential on the instance belongs to another project. No node is bound to another project's credential |
+| WooCommerce REST (read key) | Connection check on the instance (execution 95, 2026-09-25): `IDS WooCommerce Read` listed a product from infinitydigitalshop.com; the Store API check returned products with BDT prices. The other checks failed only because their credentials do not exist yet |
+| Workflow upload | The single workflow **Infinity Digital Shop — WhatsApp AI Support** exists on `n8n.wamsg.site` as `CAUTLyiBxlIyAydL`, **unpublished**. All 292 nodes are present. The Telegram nodes are bound by id to **IDS Telegram Admin** (@IDSShopAdminBot); the WooCommerce nodes to **IDS WooCommerce Read**, and *Write Stock* alone to **IDS WooCommerce Stock**. No node is bound to another project's credential |
 
 ## Verified locally (real PostgreSQL 16, real n8n, mocked providers)
 
@@ -32,10 +33,10 @@ Each of these needs the owner's credentials or a deployment.
 
 | Item | Why | What to do |
 | --- | --- | --- |
-| IDS credentials | None of these exist in n8n yet: IDS OpenRouter, IDS Zernio, IDS Telegram Admin, IDS WooCommerce Read, IDS WooCommerce Stock, IDS Postgres (wa_n8n), IDS Inbound Token and IDS Backend Token | SETUP §5; then send the credential names back so the nodes can be bound by id |
+| IDS credentials | Still missing in n8n: IDS OpenRouter, IDS Zernio, IDS Postgres (wa_n8n), IDS Inbound Token and IDS Backend Token | SETUP §5; then send the credential names back so the nodes can be bound by id |
 | Telegram bot | No bot token yet, so the bot username is unknown and pairing is untested live | Create the bot with @BotFather, store its token as **IDS Telegram Admin**, then pair (SETUP §6a) |
 | Database and dashboard hosting | Not deployed. From this environment SSH to the VPS is blocked, so it cannot be deployed from here | Run `docker compose up -d` on the VPS (SETUP §3–4) |
 | Zernio webhook, send, media, message list | Built from Zernio's published spec; no live message sent | Go-live checklist with a test phone. Keep automatic replies off until COPILOT is verified |
-| WooCommerce REST read and stock write | No REST keys yet. Stock writes were tested only against the mock | Create the two keys (read-only / read-write), then run one stock change on a test product |
+| WooCommerce stock write | The Read/Write key exists but has not written anything; stock writes were tested only against the mock | After go-live, run one stock change on a test product from Telegram |
 | Connection check on the instance | Needs the credentials above | Run "Run Connection Check"; every row must show `ok: true` |
 | Publishing and error workflow | Publish only after the checks above pass. The error workflow can be set only after publishing. (The 14 old `WA ·` workflows and the earlier draft were never published and have been archived at the owner's request; only this workflow and the Facebook + Instagram autopost remain.) | SETUP §6 |
