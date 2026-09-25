@@ -451,3 +451,44 @@ describe('customer identity scoping', () => {
     expect((await conv(a.conversation.id)).customer_id).toBe((await conv(b.conversation.id)).customer_id);
   });
 });
+
+describe('order operations', () => {
+  async function pendingRefund() {
+    const { conversation } = await newConversation('amar order refund chai');
+    return (await one(`INSERT INTO app.pending_order_operations (operation_id, conversation_id, customer_id, op_type, woo_order_id, payload, status)
+      VALUES ($1, $2, $3, 'refund', 1234, '{"details":"wrong plan"}', 'awaiting_staff_approval') RETURNING id`,
+      [`test:${randomUUID()}`, conversation.id, conversation.customer_id])).id as string;
+  }
+
+  it('agents cannot approve or record outcomes; admins approve, then record the WooCommerce result once', async () => {
+    const id = await pendingRefund();
+    const agent = await staff('agent');
+    const admin = await staff('admin');
+    await expect(one(`SELECT app.decide_order_operation($1, $2, true) AS r`, [id, agent])).rejects.toThrow();
+    // Recording before approval is refused.
+    expect((await one(`SELECT app.record_order_operation_outcome($1, $2, 'succeeded') AS r`, [id, admin])).r)
+      .toEqual({ ok: false, reason: 'status_awaiting_staff_approval' });
+    expect((await one(`SELECT app.decide_order_operation($1, $2, true) AS r`, [id, admin])).r.ok).toBe(true);
+    await expect(one(`SELECT app.record_order_operation_outcome($1, $2, 'succeeded') AS r`, [id, agent])).rejects.toThrow();
+    await expect(one(`SELECT app.record_order_operation_outcome($1, $2, 'paid') AS r`, [id, admin])).rejects.toThrow();
+    expect((await one(`SELECT app.record_order_operation_outcome($1, $2, 'succeeded', NULL, 'refunded in Woo') AS r`, [id, admin])).r)
+      .toEqual({ ok: true, status: 'succeeded' });
+    const row = await one(`SELECT status, result FROM app.pending_order_operations WHERE id = $1`, [id]);
+    expect(row.status).toBe('succeeded');
+    expect(row.result.note).toBe('refunded in Woo');
+    expect((await one(`SELECT app.record_order_operation_outcome($1, $2, 'failed') AS r`, [id, admin])).r)
+      .toEqual({ ok: false, reason: 'status_succeeded' });
+    expect((await sql(`SELECT 1 FROM app.audit_log WHERE action = 'order_op.outcome_recorded' AND entity_id = $1`, [id])).length).toBe(1);
+  });
+
+  it('settling an unknown outcome resolves its alert', async () => {
+    const id = await pendingRefund();
+    const admin = await staff('admin');
+    await one(`SELECT app.decide_order_operation($1, $2, true) AS r`, [id, admin]);
+    await one(`SELECT app.claim_order_operation($1) AS r`, [id]);
+    await one(`SELECT app.finish_order_operation($1, 'unknown', NULL, '{}') AS r`, [id]);
+    expect((await sql(`SELECT 1 FROM app.alerts WHERE kind = 'order_op_unknown' AND resolved_at IS NULL`)).length).toBe(1);
+    expect((await one(`SELECT app.record_order_operation_outcome($1, $2, 'failed') AS r`, [id, admin])).r.ok).toBe(true);
+    expect((await sql(`SELECT 1 FROM app.alerts WHERE kind = 'order_op_unknown' AND resolved_at IS NULL`)).length).toBe(0);
+  });
+});

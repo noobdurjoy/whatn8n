@@ -564,7 +564,7 @@ function Profile({ id, onClose }: { id: string; onClose: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { api<{ staff: any[] }>('/api/staff').then((r) => setStaff(r.staff.filter((s) => s.active))).catch(() => {}); }, [api]);
   useEffect(() => { if (d) setTagText((d.conversation.tags ?? []).join(', ')); }, [d]);
-  const opsPending = useMemo(() => (d?.order_operations ?? []).filter((o: any) => o.status === 'awaiting_staff_approval'), [d]);
+  const opsPending = useMemo(() => (d?.order_operations ?? []).filter((o: any) => ['awaiting_staff_approval', 'approved', 'unknown'].includes(o.status)), [d]);
   if (!d) return null;
   const c = d.conversation;
   const cu = d.customer;
@@ -639,16 +639,25 @@ function Profile({ id, onClose }: { id: string; onClose: () => void }) {
           {d.orders.map((o: any) => (
             <div key={o.woo_order_id}>#{o.woo_order_id} · {o.status ?? 'status not synced'}{o.total_minor != null ? ` · ${(o.total_minor / 100).toFixed(2)} ${o.currency}` : ''}{o.date_paid ? ' · paid (WooCommerce)' : ''}</div>
           ))}
-          {opsPending.length > 0 && <h3>Waiting for approval</h3>}
+          {opsPending.length > 0 && <h3>Order requests</h3>}
           {opsPending.map((o: any) => (
             <div key={o.id} className="card stack">
               <div><strong>{o.op_type.replace(/_/g, ' ')}</strong>{o.woo_order_id ? ` · #${o.woo_order_id}` : ''}</div>
               <pre className="code">{JSON.stringify({ details: o.payload, quote: o.quote }, null, 1)}</pre>
               {o.op_type === 'create_order' && !o.customer_confirmed_at && <span className="status-warning">Customer has not confirmed yet.</span>}
-              {can('order_approve') && (
+              {can('order_approve') && o.status === 'awaiting_staff_approval' && (
                 <div className="row">
                   <button className="btn small primary" onClick={() => run(() => api(`/api/order-ops/${o.id}`, { body: { approve: true } }))}>Approve</button>
                   <button className="btn small" onClick={() => run(() => api(`/api/order-ops/${o.id}`, { body: { approve: false } }))}>Reject</button>
+                </div>
+              )}
+              {o.status !== 'awaiting_staff_approval' && (
+                <span className="small">{o.status === 'unknown' ? 'Outcome unknown: check the order in WooCommerce.' : 'Approved: make the change in WooCommerce, then record the result.'}</span>
+              )}
+              {can('order_approve') && o.status !== 'awaiting_staff_approval' && (
+                <div className="row">
+                  <button className="btn small primary" onClick={() => run(() => api(`/api/order-ops/${o.id}`, { body: { outcome: 'succeeded' } }))}>Done in WooCommerce</button>
+                  <button className="btn small" onClick={() => run(() => api(`/api/order-ops/${o.id}`, { body: { outcome: 'failed' } }))}>Could not do it</button>
                 </div>
               )}
             </div>
