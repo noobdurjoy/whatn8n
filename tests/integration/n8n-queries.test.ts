@@ -7,7 +7,7 @@ import { generate, ORDER } from '../../n8n/workflows.mjs';
 import { asN8nRole } from './helpers';
 
 describe('n8n workflow SQL', async () => {
-  const g = await generate();
+  const g: Record<string, any> = await generate();
   const queries: { wf: string; node: string; sql: string; param: string | null }[] = [];
   for (const k of ORDER) {
     for (const n of g[k].def.nodes) {
