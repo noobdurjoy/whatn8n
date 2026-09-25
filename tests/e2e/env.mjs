@@ -88,6 +88,7 @@ export function testWorkflow({ production = false, fastSchedules = true, keepMan
         .split('https://openrouter.ai/api').join(MOCK + '/openrouter/api')
         .split('https://infinitydigitalshop.com').join(MOCK + '/shop');
     }
+    if (n.type === 'n8n-nodes-base.code' && typeof n.parameters.jsCode === 'string') n.parameters.jsCode = n.parameters.jsCode.split('https://infinitydigitalshop.com').join(MOCK + '/shop');
     if (n.name === 'Download Media') n.parameters.url = "={{ $json.blocked ? '' : $json.url.replace('https://zernio.com/api', '" + MOCK + "/zernio/api') }}";
     if (fastSchedules && n.type === 'n8n-nodes-base.scheduleTrigger' && !['Every 15 Seconds', 'Every Minute'].includes(n.name)) {
       n.parameters.rule = { interval: [{ field: 'minutes', minutesInterval: 1 }] };
@@ -96,7 +97,7 @@ export function testWorkflow({ production = false, fastSchedules = true, keepMan
   if (keepManual) wf.nodes = wf.nodes.filter((n) => n.type !== 'n8n-nodes-base.manualTrigger' || n.name === keepManual);
   if (!production) Object.assign(wf.settings, { saveDataSuccessExecution: 'all', saveDataErrorExecution: 'all' });
   wf.id = keepManual ? WORKFLOW_ID.slice(0, 16) + keepManual.replace(/\W/g, '').slice(0, 4) : WORKFLOW_ID;
-  if (keepManual) { wf.name += ' (manual test copy)'; wf.nodes = wf.nodes.filter((n) => n.type !== 'n8n-nodes-base.webhook' && n.type !== 'n8n-nodes-base.scheduleTrigger'); }
+  if (keepManual) { wf.name += ' (manual test copy)'; wf.nodes = wf.nodes.filter((n) => !['n8n-nodes-base.webhook', 'n8n-nodes-base.scheduleTrigger', 'n8n-nodes-base.errorTrigger', 'n8n-nodes-base.telegramTrigger'].includes(n.type)); }
   const names = new Set(wf.nodes.map((n) => n.name));
   for (const k of Object.keys(wf.connections)) if (!names.has(k)) delete wf.connections[k];
   // The workflow is its own error workflow (section 14) and the only workflow

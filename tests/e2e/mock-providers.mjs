@@ -109,7 +109,8 @@ export function startMock({ port, key, cert }) {
     const last = msgs[msgs.length - 1] || {};
     // What the reply model was shown (checked for notices / private notes).
     state.log.push({ kind: 'reply_prompt', text: msgs.map(text).join('\n').slice(0, 30000) });
-    const firstCustomer = [...msgs].reverse().find((m) => m.role === 'user' && /^Customer message/.test(text(m))) || {};
+    const firstCustomer = [...msgs].reverse().find((m) => m.role === 'user' && /^Customer message/.test(text(m)))
+      || [...msgs].reverse().find((m) => m.role === 'user') || {};
     const repairing = last.role === 'system' && /rejected by the backend validator/.test(text(last));
     const said = text(firstCustomer).toLowerCase();
     const reply = (reply_text, extra = {}) => completion(b.model, { role: 'assistant', content: JSON.stringify({ decision: 'reply', reply_text, handoff_reason: '', references: [], intents: ['other'], resolved: false, language: 'banglish', ...extra }) });

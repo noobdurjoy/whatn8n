@@ -772,7 +772,7 @@ function sections() {
       setRaw('Stock Refused', "{ begin_refused: $json.r.reason }"),
       pg('Save Stock Choices', `SELECT app.admin_command_finish((p->>'command_id')::uuid, 'awaiting_choice', '{}'::jsonb, p->'choices') AS ok, p->'choices' AS choices FROM ${jsonParam()}`,
         "{ command_id: " + cmd + ".command_id, choices: $json.choices }", { sample: { command_id: UUID, choices: [] } }),
-      pg('Close Stock Command', `SELECT app.admin_command_finish((p->>'command_id')::uuid, 'clarify', jsonb_build_object('reply', p->>'reply'), NULL) AS ok FROM ${jsonParam()}`,
+      pg('Close Stock Command', `SELECT app.admin_command_finish((p->>'command_id')::uuid, 'clarify', jsonb_build_object('reply', p->>'reply'), NULL) AS ok, p->>'reply' AS reply FROM ${jsonParam()}`,
         "{ command_id: " + cmd + ".command_id, reply: $json.reply }", { sample: { command_id: UUID, reply: 'x' } }),
       setRaw('Stock Message', '{ reply: $json.reply }'),
       code('Reply: stock', 'tg_reply.stock.js'),

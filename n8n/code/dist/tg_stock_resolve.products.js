@@ -20,6 +20,13 @@ if (KIND === 'products') {
   let list = Array.isArray(body) ? body : body && body.id ? [body] : [];
   list = list.filter((p) => p && p.id && p.status !== 'trash');
   if (a.sku) list = list.filter((p) => String(p.sku || '').toLowerCase() === String(a.sku).toLowerCase());
+  // A name search matches loosely ("Netflix 1 month" also finds "Spotify 1
+  // Month"): keep the products named after the owner's first product word.
+  if (!a.sku && !a.product_id && a.query && list.length > 1) {
+    const first = norm(a.query).split(' ').find((w) => w.length >= 3 && !/^\d+$/.test(w));
+    const named = first ? list.filter((p) => norm(p.name).split(' ').indexOf(first) >= 0) : [];
+    if (named.length && named.length < list.length) list = named;
+  }
   if (!list.length) {
     return fail(a.sku ? 'No product or variation has SKU ' + a.sku + '. Check the SKU, or use the product name or id.' : 'No product matched "' + (a.query || '') + '".');
   }
