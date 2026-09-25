@@ -5,11 +5,13 @@
 // prices and stock; nothing here is cached or invented. Shop text is passed
 // as untrusted data and trimmed; only structured fields are relied on.
 // Output (to the Tool Runner): { ok, content, ref, allowed_urls, price_data, verified_paid, error }
+// @include shared/url.js: parseUrl, rawQueryPairs
 
 const KIND = '__VARIANT__';
 const req = $('Woo Tool Request').first().json;
 const base = String($('Load Shop').first().json.base || '').replace(/\/+$/, '');
-const shopHost = (() => { try { return new URL(base).host; } catch (e) { return null; } })();
+const shopUrl = parseUrl(base);
+const shopHost = shopUrl && shopUrl.protocol === 'https:' ? shopUrl.host : null;
 
 function fail(error, note) {
   return [{ json: { ok: false, content: { error: error, note: note || 'Live shop data is unavailable right now. Do not guess prices or stock; offer a person.' }, ref: null, allowed_urls: [], price_data: false, verified_paid: false, error: error } }];
@@ -40,18 +42,19 @@ function text(html, max) {
     .replace(/&[a-z]+;|&#\d+;/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 function sameShop(u) {
-  try { const x = new URL(u); return x.protocol === 'https:' && x.host === shopHost; } catch (e) { return false; }
+  const x = parseUrl(u);
+  return Boolean(x) && x.protocol === 'https:' && x.host === shopHost && !x.userinfo;
 }
 // Query string of a Store API add_to_cart.url on the shop's own domain, e.g.
 // "attribute_validity=1+Month&variation_id=19607&add-to-cart=4330".
 function cartQuery(p) {
   const raw = p && p.add_to_cart && typeof p.add_to_cart.url === 'string' ? p.add_to_cart.url.replace(/&#0?38;|&amp;/g, '&') : '';
-  try {
-    const u = new URL(raw);
-    if (u.protocol !== 'https:' || u.host !== shopHost || !u.searchParams.get('add-to-cart')) return null;
-    u.searchParams.delete('quantity');
-    return u.searchParams.toString();
-  } catch (e) { return null; }
+  const u = parseUrl(raw);
+  if (!u || u.protocol !== 'https:' || u.host !== shopHost || u.userinfo) return null;
+  // WooCommerce's own encoding is kept as is; only "quantity" is dropped.
+  const pairs = rawQueryPairs(u.search).filter(([k]) => k !== 'quantity');
+  if (!pairs.some(([k, v]) => k === 'add-to-cart' && /^\d+$/.test(v))) return null;
+  return pairs.map(([k, v]) => k + '=' + v).join('&');
 }
 function summary(p) {
   return {

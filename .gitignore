@@ -9,3 +9,4 @@ next-env.d.ts
 .claude/settings.local.json
 coverage/
 backups/
+.e2e/

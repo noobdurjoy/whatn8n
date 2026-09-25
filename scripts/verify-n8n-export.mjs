@@ -1,5 +1,5 @@
 // Compares workflows as they exist on the n8n instance with the generated
-// definitions in n8n/workflows/*.json (node types, versions, parameters
+// definition in n8n/workflow/*.json (node types, versions, parameters
 // including every Code node's JavaScript, credential references, connections).
 //
 // Usage: node scripts/verify-n8n-export.mjs <file-with-workflow-json>...
@@ -9,9 +9,9 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
 const root = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
-const dir = path.join(root, 'n8n', 'workflows');
+const dir = path.join(root, 'n8n', 'workflow');
 const local = {};
-for (const f of (await readdir(dir)).filter((x) => x.endsWith('.json') && !['code-nodes.json', 'ids.json'].includes(x))) {
+for (const f of (await readdir(dir)).filter((x) => x.endsWith('.json') && x !== 'code-nodes.json')) {
   const wf = JSON.parse(await readFile(path.join(dir, f), 'utf8'));
   local[wf.name] = { file: f, wf };
 }

@@ -10,7 +10,8 @@ export const GET = staffRoute({ cap: 'view' }, async () => {
   const r = (await getPool().query(
     `SELECT app.setting_bool('ai_enabled', false) AS ai_enabled, app.setting_bool('sending_enabled', true) AS sending_enabled,
             (SELECT count(*)::int FROM app.outbound_messages WHERE status = 'sending') AS in_flight,
-            (SELECT count(*)::int FROM app.outbound_messages WHERE status = 'queued') AS queued`)).rows[0];
+            (SELECT count(*)::int FROM app.outbound_messages WHERE status = 'queued') AS queued,
+            coalesce((SELECT checked_at > now() - interval '3 minutes' FROM app.health_checks WHERE component = 'n8n_maintenance'), false) AS automation_ok`)).rows[0];
   return json(r);
 });
 

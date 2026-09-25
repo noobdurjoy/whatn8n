@@ -393,6 +393,15 @@ describe('copilot drafts', () => {
 });
 
 describe('workflow database role (least privilege)', () => {
+  it('can run the knowledge search and the event claim for real (not just plan them)', async () => {
+    // Regression: SECURITY DEFINER functions pin search_path; pg_trgm lives in public.
+    await asN8nRole(async (c) => {
+      const k = await c.query(`SELECT * FROM app.search_knowledge('refund policy', 5)`);
+      expect(Array.isArray(k.rows)).toBe(true);
+      const e = await c.query(`SELECT app.claim_event_route(gen_random_uuid()) AS r`);
+      expect(e.rows[0].r).toEqual({ ok: false, reason: 'event_not_found' });
+    });
+  });
   it('cannot change modes or send directly, and cannot act as staff', async () => {
     const { conversation } = await newConversation();
     const owner = await staff('owner');

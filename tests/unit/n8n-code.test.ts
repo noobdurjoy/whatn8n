@@ -3,19 +3,25 @@
 // as it will run inside the workflows. The last block checks that the
 // exported workflow JSON contains these files unchanged.
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { buildAll } from '../../n8n/build.mjs';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const dist = path.join(root, 'n8n/code/dist');
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
 type Item = { json: any; binary?: any };
 function node(items: Item[] | any) {
   const list: Item[] = Array.isArray(items) ? items : [{ json: items }];
-  return { first: () => list[0], all: () => list, item: list[0], isExecuted: true };
+  return { first: () => list[0], all: () => list, item: list[0], itemMatching: (i: number) => list[i], isExecuted: true };
 }
+// The scripts run in a fresh V8 context with exactly the globals n8n's Code
+// sandbox (task runner, n8n 2.x) provides: JavaScript built-ins plus the list
+// below — notably NO URL, URLSearchParams, fetch or process. `this.helpers`
+// resolves to the context's helpers, as in n8n.
+const SANDBOX_GLOBALS = { Buffer, setTimeout, setInterval, setImmediate, clearTimeout, clearInterval, clearImmediate, btoa, atob,
+  TextDecoder, TextDecoderStream, TextEncoder, TextEncoderStream, FormData };
 async function run(file: string, input: any, nodes: Record<string, any> = {}, helpers: any = {}) {
   const code = readFileSync(path.join(dist, file), 'utf8');
   const $input = node(input);
@@ -23,8 +29,9 @@ async function run(file: string, input: any, nodes: Record<string, any> = {}, he
     if (!(name in nodes)) return { isExecuted: false, first: () => { throw new Error('node not executed: ' + name); }, all: () => [] };
     return node(nodes[name]);
   };
-  const fn = new AsyncFunction('$input', '$', code);
-  return (await fn.call({ helpers }, $input, $)) as Item[];
+  const context = vm.createContext({ ...SANDBOX_GLOBALS, console, $input, $, helpers, module: { exports: {} } });
+  vm.runInContext(`module.exports = async function VmCodeWrapper() {${code}\n}()`, context);
+  return (await context.module.exports) as Item[];
 }
 
 describe('build', () => {
@@ -198,8 +205,14 @@ describe('A2 media download', () => {
     const items = [{ json: { statusCode: 400 } }, { json: { statusCode: 200, headers: { 'content-type': 'image/png' } }, binary: { data: { mimeType: 'image/png' } } }];
     const out = await run('a2_check.js', items, { 'Plan Downloads': plans, 'Load Pending': { cfg: { max_bytes: 100 } } },
       { getBinaryDataBuffer: async () => Buffer.from([0x89, 0x50]) });
-    expect(out[0].json).toMatchObject({ ok: false, status: 'expired' });
-    expect(out[1].json).toMatchObject({ ok: true, mime: 'image/png', data_base64: Buffer.from([0x89, 0x50]).toString('base64') });
+    // One joined item, so "Save Downloads" runs once and the router continues once.
+    expect(out).toHaveLength(1);
+    expect(out[0].json.downloads[0]).toMatchObject({ ok: false, status: 'expired' });
+    expect(out[0].json.downloads[1]).toMatchObject({ ok: true, mime: 'image/png', data_base64: Buffer.from([0x89, 0x50]).toString('base64') });
+  });
+  it('plans a single skip item when nothing is pending (the router must still continue)', async () => {
+    const out = await run('a2_plan.js', { list: [] });
+    expect(out).toEqual([{ json: { skip: true } }]);
   });
 });
 
@@ -296,20 +309,51 @@ describe('B reply chain (mocked model)', () => {
 });
 
 describe('workflow export fidelity', () => {
-  const dir = path.join(root, 'n8n/workflows');
-  it.skipIf(!existsSync(dir))('every Code node in n8n/workflows matches a dist file exactly', () => {
+  const file = path.join(root, 'n8n/workflow/ids-whatsapp-ai-support.json');
+  const wf = JSON.parse(readFileSync(file, 'utf8'));
+  it('every Code node in the single workflow matches a dist file exactly', () => {
     const distFiles = new Map(readdirSync(dist).map((f) => [f, readFileSync(path.join(dist, f), 'utf8')]));
-    const manifest = JSON.parse(readFileSync(path.join(dir, 'code-nodes.json'), 'utf8')) as Record<string, Record<string, string>>;
+    const manifest = JSON.parse(readFileSync(path.join(root, 'n8n/workflow/code-nodes.json'), 'utf8')) as Record<string, string>;
     let checked = 0;
-    for (const f of readdirSync(dir).filter((x) => x.endsWith('.json') && !['code-nodes.json', 'ids.json'].includes(x))) {
-      const wf = JSON.parse(readFileSync(path.join(dir, f), 'utf8'));
-      for (const n of wf.nodes.filter((x: any) => x.type === 'n8n-nodes-base.code')) {
-        const src = manifest[f]?.[n.name];
-        expect(src, `${f} / ${n.name} has no manifest entry`).toBeTruthy();
-        expect(n.parameters.jsCode, `${f} / ${n.name}`).toBe(distFiles.get(src!));
-        checked++;
-      }
+    for (const n of wf.nodes.filter((x: any) => x.type === 'n8n-nodes-base.code')) {
+      const src = manifest[n.name];
+      expect(src, `${n.name} has no manifest entry`).toBeTruthy();
+      expect(n.parameters.jsCode, n.name).toBe(distFiles.get(src!));
+      checked++;
     }
-    expect(checked).toBeGreaterThan(20);
+    expect(checked).toBeGreaterThan(40);
+  });
+  it('is one self-contained workflow: no sub-workflow calls, no calls to its own webhooks', () => {
+    const types = wf.nodes.map((n: any) => n.type);
+    expect(types.filter((t: string) => /executeWorkflow|workflowTool|toolWorkflow/i.test(t))).toEqual([]);
+    const selfCalls = wf.nodes.filter((n: any) => n.type === 'n8n-nodes-base.httpRequest' && /\/webhook(-test)?\//.test(JSON.stringify(n.parameters)));
+    expect(selfCalls).toEqual([]);
+    expect(types).toContain('n8n-nodes-base.errorTrigger');
+    // Every connection points at an existing node.
+    const names = new Set(wf.nodes.map((n: any) => n.name));
+    for (const [from, c] of Object.entries<any>(wf.connections)) {
+      expect(names.has(from), from).toBe(true);
+      for (const out of c.main) for (const t of out) expect(names.has(t.node), t.node).toBe(true);
+    }
+  });
+  it('every loop body returns to its loop (no path can stall a loop)', () => {
+    const loops = wf.nodes.filter((n: any) => n.type === 'n8n-nodes-base.splitInBatches').map((n: any) => n.name);
+    const out = (name: string) => (wf.connections[name]?.main || []).flat().map((t: any) => t.node);
+    for (const loopName of loops) {
+      // Walk the loop body from output 1; every node reached must either lead
+      // back to the loop or be a dead end that is intentionally outside it.
+      const first = (wf.connections[loopName]?.main?.[1] || []).map((t: any) => t.node);
+      const seen = new Set<string>();
+      const stack = [...first];
+      let returns = false;
+      while (stack.length) {
+        const n = stack.pop()!;
+        if (n === loopName) { returns = true; continue; }
+        if (seen.has(n)) continue;
+        seen.add(n);
+        stack.push(...out(n));
+      }
+      expect(returns, loopName + ' body must return to the loop').toBe(true);
+    }
   });
 });

@@ -1,0 +1,79 @@
+{
+ "id": "18XHcZbIFGwdZBr1",
+ "name": "WA · Z Error Handler",
+ "description": "WhatsApp support: turns any WA workflow failure into a dashboard alert (one per workflow per hour).",
+ "active": false,
+ "versionId": "bcfed3f2-d336-4f5b-9dc6-66dd3efe5dc7",
+ "updatedAt": "2026-09-25T13:07:50.095Z",
+ "settings": {
+  "executionOrder": "v1",
+  "availableInMCP": true
+ },
+ "nodes": [
+  {
+   "id": "4e9db98d-74d2-4ea3-ad2e-b448fe2d68ef",
+   "name": "On Workflow Error",
+   "type": "n8n-nodes-base.errorTrigger",
+   "typeVersion": 1,
+   "position": [
+    0,
+    0
+   ],
+   "parameters": {}
+  },
+  {
+   "id": "c50eb218-e596-499a-a507-f31cd9749dde",
+   "name": "Format Error",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    224,
+    0
+   ],
+   "parameters": {
+    "jsCode": "// WA · Z Error Handler — \"Format Error\"\n// Any WA workflow that fails raises one dashboard alert per workflow and hour\n// (the maintenance workflow forwards alerts to staff). Only the failing node\n// and a short error message are kept; no input data is copied.\n\nconst e = $input.first().json || {};\nconst wf = e.workflow || {};\nconst ex = e.execution || {};\nconst msg = String((ex.error && ex.error.message) || '').replace(/\\s+/g, ' ').slice(0, 300);\nreturn [{ json: {\n  message: ('Workflow failed: ' + String(wf.name || 'unknown')).slice(0, 200),\n  details: { workflow_id: wf.id || null, workflow: wf.name || null, execution_id: ex.id || null, node: ex.lastNodeExecuted || null, error: msg, url: ex.url || null },\n  dedupe: 'workflow_error:' + (wf.id || 'unknown') + ':' + new Date().toISOString().slice(0, 13),\n} }];\n"
+   }
+  },
+  {
+   "id": "5e6f5a30-0093-4cf6-8865-b5a5299c6a70",
+   "name": "Raise Alert",
+   "type": "n8n-nodes-base.postgres",
+   "typeVersion": 2.6,
+   "position": [
+    448,
+    0
+   ],
+   "parameters": {
+    "operation": "executeQuery",
+    "query": "SELECT app.raise_alert('workflow_error', 'warning', p->>'message', p->'details', p->>'dedupe') AS ok FROM (SELECT $1::jsonb AS p) x",
+    "options": {
+     "queryReplacement": "={{ JSON.stringify($json) }}"
+    }
+   }
+  }
+ ],
+ "connections": {
+  "On Workflow Error": {
+   "main": [
+    [
+     {
+      "node": "Format Error",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Format Error": {
+   "main": [
+    [
+     {
+      "node": "Raise Alert",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ }
+}

@@ -639,7 +639,7 @@ function Profile({ id, onClose }: { id: string; onClose: () => void }) {
           {d.orders.map((o: any) => (
             <div key={o.woo_order_id}>#{o.woo_order_id} · {o.status ?? 'status not synced'}{o.total_minor != null ? ` · ${(o.total_minor / 100).toFixed(2)} ${o.currency}` : ''}{o.date_paid ? ' · paid (WooCommerce)' : ''}</div>
           ))}
-          {opsPending.length > 0 && <h3>Order requests</h3>}
+          {opsPending.length > 0 && <h3>Order requests (staff-handled in WooCommerce)</h3>}
           {opsPending.map((o: any) => (
             <div key={o.id} className="card stack">
               <div><strong>{o.op_type.replace(/_/g, ' ')}</strong>{o.woo_order_id ? ` · #${o.woo_order_id}` : ''}</div>
@@ -652,12 +652,12 @@ function Profile({ id, onClose }: { id: string; onClose: () => void }) {
                 </div>
               )}
               {o.status !== 'awaiting_staff_approval' && (
-                <span className="small">{o.status === 'unknown' ? 'Outcome unknown: check the order in WooCommerce.' : 'Approved: make the change in WooCommerce, then record the result.'}</span>
+                <span className="small">{o.status === 'unknown' ? 'Outcome unknown: check the order in WooCommerce.' : 'Approved. Nothing is changed automatically: make the change yourself in WooCommerce, then record what happened.'}</span>
               )}
               {can('order_approve') && o.status !== 'awaiting_staff_approval' && (
                 <div className="row">
-                  <button className="btn small primary" onClick={() => run(() => api(`/api/order-ops/${o.id}`, { body: { outcome: 'succeeded' } }))}>Done in WooCommerce</button>
-                  <button className="btn small" onClick={() => run(() => api(`/api/order-ops/${o.id}`, { body: { outcome: 'failed' } }))}>Could not do it</button>
+                  <button className="btn small primary" onClick={() => run(() => api(`/api/order-ops/${o.id}`, { body: { outcome: 'succeeded' } }))}>I did it in WooCommerce</button>
+                  <button className="btn small" onClick={() => run(() => api(`/api/order-ops/${o.id}`, { body: { outcome: 'failed' } }))}>Not done</button>
                 </div>
               )}
             </div>

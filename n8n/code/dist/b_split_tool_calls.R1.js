@@ -1,5 +1,6 @@
 // WA · B AI Reply — "R1 Split Tool Calls"
-// One item per tool call for the Tool Runner sub-workflow. The allowlist and
+// One item per tool call for the shared tool branch (a loop, one call at a time;
+// "Tool Return" sends each result back to this round's loop via `round`). The allowlist and
 // argument checks happen again inside the Tool Runner; here we only cap the
 // number of image analyses per turn (settings.vision.max_images_per_turn).
 
@@ -13,6 +14,6 @@ for (const c of state.pending_calls || []) {
     else if (imagesLeft <= 0) blocked = 'image_limit_reached';
     else imagesLeft--;
   }
-  out.push({ json: { job_id: state.job_id, conversation_id: state.conversation_id, customer_language: state.customer_language, call_id: c.id, name: c.name, arguments: c.arguments, blocked: blocked } });
+  out.push({ json: { round: 'R1', job_id: state.job_id, conversation_id: state.conversation_id, customer_language: state.customer_language, call_id: c.id, name: c.name, arguments: c.arguments, blocked: blocked } });
 }
 return out;

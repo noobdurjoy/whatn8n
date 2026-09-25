@@ -8,7 +8,9 @@ DECLARE f record;
 BEGIN
   FOR f IN SELECT p.oid::regprocedure AS sig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'app'
   LOOP
-    EXECUTE format('ALTER FUNCTION %s SECURITY DEFINER SET search_path = app, pg_temp', f.sig);
+    -- public holds the extensions (pg_trgm similarity/%, citext); only the owner
+    -- (wa_app) may create objects there (db/roles.sql), so it is safe to search.
+    EXECUTE format('ALTER FUNCTION %s SECURITY DEFINER SET search_path = app, public, pg_temp', f.sig);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f.sig);
   END LOOP;
 END $$;
@@ -58,7 +60,8 @@ BEGIN
       app.unknown_sends_for_reconcile(), app.attach_reconcile_evidence(uuid, jsonb), app.pending_attachments(uuid[]),
       app.notification_facts(uuid), app.upsert_woo_order_ref(jsonb), app.upsert_woo_products(jsonb),
       app.get_webhook_event(uuid), app.due_outbound(integer), app.history_import_targets(integer),
-      app.setting(text), app.setting_bool(text, boolean), app.setting_int(text, integer)
+      app.setting(text), app.setting_bool(text, boolean), app.setting_int(text, integer),
+      app.claim_event_route(uuid), app.recover_stale_ai_jobs(interval)
     TO wa_n8n;
     -- Read access needed by the workflows, and the WooCommerce sync tables.
     GRANT SELECT ON app.settings, app.prompt_versions, app.conversations, app.messages, app.attachments,

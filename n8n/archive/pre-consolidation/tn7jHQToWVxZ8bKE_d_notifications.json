@@ -1,0 +1,121 @@
+{
+ "id": "tn7jHQToWVxZ8bKE",
+ "name": "WA · D Notifications",
+ "description": "WhatsApp support: staff notifications (Telegram) with facts and a dashboard link only.",
+ "active": false,
+ "versionId": "32783256-9fcc-4e2c-804f-c39b5f5a5b41",
+ "updatedAt": "2026-09-25T13:08:08.576Z",
+ "settings": {
+  "executionOrder": "v1",
+  "availableInMCP": true
+ },
+ "nodes": [
+  {
+   "id": "7e5396ad-5e4c-43cc-b4e5-1bda7ad3648f",
+   "name": "Notify Request",
+   "type": "n8n-nodes-base.executeWorkflowTrigger",
+   "typeVersion": 1.1,
+   "position": [
+    0,
+    0
+   ],
+   "parameters": {
+    "inputSource": "passthrough"
+   }
+  },
+  {
+   "id": "4be26ded-b32b-4f6b-90f8-8214c018bac3",
+   "name": "Load Facts",
+   "type": "n8n-nodes-base.postgres",
+   "typeVersion": 2.6,
+   "position": [
+    224,
+    0
+   ],
+   "parameters": {
+    "operation": "executeQuery",
+    "query": "SELECT (SELECT app.notification_facts((p->>'conversation_id')::uuid) WHERE p->>'conversation_id' ~* '^[0-9a-f-]{36}$') AS f,\n       app.setting('notifications') AS notify, app.setting('dashboard_url') #>> '{}' AS dash FROM (SELECT $1::jsonb AS p) x",
+    "options": {
+     "queryReplacement": "={{ JSON.stringify({ conversation_id: $json.conversation_id || ($json.alert && $json.alert.details && $json.alert.details.conversation_id) || null }) }}"
+    }
+   }
+  },
+  {
+   "id": "67900cb9-20c0-4ad5-873c-afcb97555213",
+   "name": "Format Notification",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    448,
+    0
+   ],
+   "parameters": {
+    "jsCode": "// WA · D Notifications — \"Format Notification\"\n// Staff alerts (handoffs, failed or unknown sends, emergency stop, holds,\n// connection problems). They carry facts and a dashboard link only, never\n// message content, attachments or customer contact details.\n// Input: { f, notify, dash } from \"Load Facts\"; the request from \"Notify Request\".\n\nconst req = $('Notify Request').first().json || {};\nconst row = $input.first().json || {};\nconst notify = row.notify || {};\nconst f = row.f || {};\nconst alert = req.alert || null;\nconst reason = String(req.reason || (alert && alert.kind) || 'notice');\nconst category = reason.startsWith('ai_handoff') || reason === 'customer_requested_human' ? 'handoff'\n  : reason === 'automation_hold' || reason === 'external_human_reply' ? 'hold'\n  : reason;\nif (!notify.telegram_enabled || !/^-?\\d{3,20}$/.test(String(notify.telegram_chat_id || ''))) return [];\nif (Array.isArray(notify.notify_on) && notify.notify_on.indexOf(category) < 0 && category !== 'hold') return [];\n\nconst LABEL = {\n  customer_requested_human: 'Customer asked for a person',\n  external_human_reply: 'Someone replied outside the dashboard (AI paused)',\n  automation_hold: 'Outgoing message of unknown origin (AI paused)',\n  delivery_failed: 'A message was not delivered',\n  send_failed: 'A message could not be sent',\n  send_unknown: 'A send result is unknown (check before retrying)',\n  emergency_stop: 'Emergency stop is active',\n  connection_down: 'WhatsApp connection problem',\n  response_overdue: 'Customer waiting past the response target',\n};\nconst title = LABEL[reason] || (reason.startsWith('ai_handoff') ? 'AI handed the chat to staff (' + reason.slice(11).replace(/_/g, ' ') + ')' : (alert && alert.message) || reason);\nconst conv = f.conversation_id || (alert && alert.details && alert.details.conversation_id) || req.conversation_id || null;\nconst dash = String(row.dash || '').replace(/\\/+$/, '');\nconst lines = ['WhatsApp support: ' + title];\nif (f.customer) lines.push('Customer: ' + String(f.customer).slice(0, 60));\nif (f.mode) lines.push('Mode: ' + f.mode + (f.assigned_to ? ' · assigned to ' + f.assigned_to : ' · unassigned'));\nif (dash && conv) lines.push(dash + '/?c=' + conv);\n// Telegram parses HTML: escape everything we did not write ourselves.\nconst esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nreturn [{ json: { chat_id: String(notify.telegram_chat_id), text: esc(lines.join('\\n').slice(0, 1000)), alert_id: alert ? alert.id : null } }];\n"
+   }
+  },
+  {
+   "id": "b74cfe4a-9fcc-4e47-af52-daad61dda713",
+   "name": "Send Telegram",
+   "type": "n8n-nodes-base.telegram",
+   "typeVersion": 1.2,
+   "position": [
+    672,
+    0
+   ],
+   "parameters": {
+    "resource": "message",
+    "operation": "sendMessage",
+    "chatId": "={{ $json.chat_id }}",
+    "text": "={{ $json.text }}",
+    "additionalFields": {
+     "appendAttribution": false,
+     "disable_web_page_preview": true,
+     "parse_mode": "HTML"
+    }
+   },
+   "onError": "continueRegularOutput",
+   "webhookId": "fb3c7c24-79e5-4671-871c-29bc8dafd49a",
+   "credentials": {
+    "telegramApi": {
+     "id": "hC69Jo0AvNHRZ5PX",
+     "name": "Telegram account"
+    }
+   }
+  }
+ ],
+ "connections": {
+  "Notify Request": {
+   "main": [
+    [
+     {
+      "node": "Load Facts",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Load Facts": {
+   "main": [
+    [
+     {
+      "node": "Format Notification",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Format Notification": {
+   "main": [
+    [
+     {
+      "node": "Send Telegram",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ }
+}

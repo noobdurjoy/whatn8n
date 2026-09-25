@@ -10,22 +10,27 @@ docker compose run --rm app node scripts/seed.mjs      # adds new default settin
 docker compose up -d app
 ```
 
-**n8n changes.** Edit `n8n/code/src` or `n8n/workflows.mjs` and never the generated JSON. Then:
+**n8n changes.** There is one workflow, *Infinity Digital Shop — WhatsApp AI Support*. Edit `n8n/code/src` or `n8n/workflow.mjs`, never the generated JSON. Then:
 
-1. Run `npm run n8n:build && node n8n/workflows.mjs`.
-2. Commit the result.
-3. Apply it to the instance, either by importing the changed `n8n/workflows/*.json` or through the n8n MCP tools.
-4. Verify the instance against the repo:
+1. Run `npm run n8n:build && node n8n/workflow.mjs`.
+2. Run the tests (below) and commit the result.
+3. Apply it to the instance by importing `n8n/workflow/ids-whatsapp-ai-support.json` over the existing workflow, or through the n8n MCP tools.
+4. Re-attach credentials if n8n asks, run **Run Connection Check**, then publish.
 
-   ```bash
-   node scripts/verify-n8n-export.mjs exported/*.json   # every workflow must print OK
-   ```
+Before every deploy, run `npm run typecheck && npm test`:
+- the unit tests run every Code node in a copy of n8n's Code sandbox, which has no `URL` or `fetch`;
+- the integration tests plan every workflow query as `wa_n8n`, so a missing grant fails before production.
 
-Before every deploy, run `npm run typecheck && npm test`. The integration tests plan every workflow query as `wa_n8n`, so a missing grant fails the tests before it can fail in production.
+For workflow changes, also run the end-to-end suite. It runs the real workflow in a local n8n against PostgreSQL and a provider mock:
+
+```bash
+npm install --prefix .e2e/n8n n8n    # once; n8n 2.x needs Node 24 (set N8N_NODE)
+N8N_NODE=/path/to/node24 node tests/e2e/run.mjs --setup
+```
 
 ## Backup and restore
 
-The application database is the only state that must be backed up. It holds chats, settings, knowledge and audit. n8n keeps no chat data, and its execution data for successful runs is off in C, I, J, A2 and B2.
+The application database is the only state that must be backed up. It holds chats, settings, knowledge and audit. n8n keeps no chat data: the workflow saves no production execution data (success or failure).
 
 ```bash
 # nightly, e.g. cron: 30 2 * * *
@@ -43,7 +48,7 @@ Copy the backup directory off the host, for example with restic or rclone. The d
 
 **Restore.** Test this every quarter, on a scratch database:
 
-1. Stop the app and unpublish the n8n workflows.
+1. Stop the app and unpublish the n8n workflow.
 2. Create an empty database with `db/roles.sql` (or `createdb -O wa_app wa_support`, plus the `citext` and `pg_trgm` extensions).
 3. Run:
 
@@ -52,7 +57,7 @@ Copy the backup directory off the host, for example with restic or rclone. The d
    ```
 
    The script refuses to restore into a database that already has tables. It re-applies the `wa_n8n` grants and sets `ai_enabled = false`.
-4. Start the app, check **Operations**, publish the workflows, and turn AI on again deliberately.
+4. Start the app, check **Operations**, publish the workflow, and turn AI on again deliberately.
 
 ## Daily operation
 
@@ -60,10 +65,10 @@ Copy the backup directory off the host, for example with restic or rclone. The d
   - A staff reply in AUTO mode takes the conversation over in the same transaction.
   - **Resume AI** hands the conversation back to AUTO. Admins can always do this; agents only if `agents_can_resume_ai` is on.
 - **Drafts (COPILOT).** Approve, edit or discard. A draft becomes invalid when the customer writes again or the mode changes.
-- **Order requests.** A request the AI recorded shows under *Order requests* in the customer panel. Admins and owners:
+- **Order requests** (staff-handled). A request the AI recorded (refund, cancellation, address change, renewal, access issue) shows under *Order requests* in the customer panel. **Nothing is changed automatically.** Admins and owners:
   1. approve or reject the request;
-  2. make the change in WooCommerce;
-  3. click **Done in WooCommerce** or **Could not do it**.
+  2. make the change themselves in WooCommerce (refunds go through the payment gateway there);
+  3. record what happened: **I did it in WooCommerce** or **Not done**.
 - **Knowledge.** H proposes updates every night. Nothing reaches the AI until an admin approves and publishes it under **Knowledge**.
 - **Prompts.** New prompt versions must pass a run in *Settings → Prompts & test area* before they can be published.
 
@@ -73,7 +78,7 @@ Copy the backup directory off the host, for example with restic or rclone. The d
 | --- | --- | --- |
 | **Turn AI off** | top bar (admin) | No new AI jobs; running jobs become stale; staff sending continues |
 | **Stop all outgoing** | top bar (admin) | Emergency stop: every claim is refused, including staff replies, drafts, scheduled messages and retries. Incoming messages are still saved. Messages already with the provider cannot be recalled; the top bar shows how many are in flight |
-| **Resume sending** | top bar (admin) | Queued messages are re-checked (mode, window, staleness) before sending |
+| **Resume sending** | top bar (admin) | New messages are sent again. Messages that were queued or attempted during the stop stay **canceled**; resuming never releases them. Re-send by hand whatever is still needed |
 | Take over / Resume AI | conversation header | Per conversation |
 | Reviewed — allow AI again | conversation header | Clears an AI pause caused by an unknown outgoing origin |
 
@@ -89,7 +94,7 @@ Copy the backup directory off the host, for example with restic or rclone. The d
 
 If there is no row at all, check **Operations → Open alerts**, then the n8n executions of A and B.
 
-**Send outcome unknown.** Every 5 minutes, I compares the message with Zernio's message list. It marks the message sent only when exactly one outgoing message with the same text exists. Otherwise it attaches the evidence to the alert. Check the customer's WhatsApp thread, then choose one of:
+**Send outcome unknown.** Every 5 minutes, the maintenance branch compares the message with Zernio's message list. It marks the message sent only when exactly one outgoing message with the same text exists. Otherwise it attaches the evidence to the alert. Check the customer's WhatsApp thread, then choose one of:
 
 - **It was delivered**;
 - **Retry**, which reuses the same Idempotency-Key and still passes every check;
@@ -97,7 +102,7 @@ If there is no row at all, check **Operations → Open alerts**, then the n8n ex
 
 Never retry without checking.
 
-**Order request outcome unknown** (critical alert `order_op_unknown`). Check the order in WooCommerce, then record **Done in WooCommerce** or **Could not do it**. Recording the outcome resolves the alert.
+**Order request outcome unknown** (critical alert `order_op_unknown`). Check the order in WooCommerce, then record **I did it in WooCommerce** or **Not done**. Recording the outcome resolves the alert.
 
 **Webhooks stopped arriving.** Check these in order:
 
@@ -105,12 +110,16 @@ Never retry without checking.
 2. An `account_disconnected` alert means reconnecting the number in Zernio.
 3. `401` responses in the proxy log mean the webhook secret differs from `ZERNIO_WEBHOOK_SECRET`.
 
-Stored events that were not processed are retried by the sweep (I, every minute, up to 10 attempts).
+Stored events that were not processed are retried by the event sweep (every minute, up to 10 attempts).
 
-**n8n down.** Staff messages stay `queued` and AI jobs do not start, so nothing wrong is sent. When n8n returns:
+**n8n down** (**Automation offline** in the top bar; `/api/health/n8n` returns 503). Staff messages stay `queued` and AI jobs do not start, so nothing wrong is sent. Check that n8n is running and that the workflow is published. When n8n returns:
 
 - C's 15-second sweep sends the queued messages; each claim re-checks every control first.
 - The backend sweep re-delivers routing calls that n8n missed.
+
+**AI reply interrupted** (alert `ai_job_interrupted`). n8n restarted or crashed while a reply was being generated. After 10 minutes the maintenance branch marks the job failed and hands the conversation to staff (with the fixed acknowledgement in AUTO). Answer the customer from the dashboard.
+
+**Workflow error** (alert `workflow_error`). The alert names the failing node and the n8n execution id. Production execution data is not saved (privacy), so reproduce it with *Run Connection Check*, or a manual test on the test phone, before changing anything.
 
 **Database down.** The backend returns errors. n8n claims fail, so nothing is sent. Restore the database first, then check **Operations**.
 
@@ -121,8 +130,7 @@ Stored events that were not processed are retried by the sweep (I, every minute,
 
 Raise `ai_daily_budget_usd` in **Settings** if the spend is expected. The limit is a rolling 24 hours.
 
-**Import earlier chat history.** An admin runs **J History Import** manually in n8n.
-
+**Import earlier chat history.** An admin opens the workflow in n8n and runs **Run History Import** (manual trigger, section 13).
 - It imports the history of every known WhatsApp conversation (up to 50 pages of 100 messages each) as *historical* messages.
 - Historical messages are never answered and never count toward metrics.
 - Running it twice does not duplicate messages.
@@ -134,7 +142,7 @@ Raise `ai_daily_budget_usd` in **Settings** if the spend is expected. The limit 
 
 ## Retention
 
-I applies `settings.retention` every day at 04:10 Asia/Dhaka:
+The maintenance branch applies `settings.retention` every day at 04:10 Asia/Dhaka:
 
 | Data | Kept for |
 | --- | --- |

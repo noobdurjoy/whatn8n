@@ -19,7 +19,8 @@
     "db:seed": "node scripts/seed.mjs",
     "staff:create": "node scripts/create-staff.mjs",
     "verify:models": "node scripts/verify-models.mjs",
-    "n8n:build": "node n8n/build.mjs"
+    "n8n:build": "node n8n/build.mjs && node n8n/workflow.mjs",
+    "test:e2e": "node tests/e2e/run.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.1",

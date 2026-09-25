@@ -1,6 +1,8 @@
 // Backend → n8n notifications. Each call is small (ids only) and
-// authenticated with X-Internal-Token (an n8n Header Auth credential on the
-// receiving Webhook node). All of them are safe to repeat: the database
+// authenticated with `Authorization: Bearer <N8N_INTERNAL_TOKEN>` (an n8n Header
+// Auth credential on the receiving Webhook node). n8n redacts the Authorization
+// header from the Webhook node's output, so the token never lands in
+// execution data. All of them are safe to repeat: the database
 // functions refuse duplicate or stale work.
 
 type Hook = 'wa-router' | 'wa-dispatch' | 'wa-ai-job' | 'wa-woo-event';
@@ -14,7 +16,7 @@ export async function callN8n(hook: Hook, payload: Record<string, unknown>, time
   try {
     const r = await fetch(`${base.replace(/\/$/, '')}/${hook}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-internal-token': token },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
       signal: ctl.signal,
     });

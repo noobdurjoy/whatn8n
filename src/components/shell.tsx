@@ -17,7 +17,7 @@ export function useAppEvents(fn: (e: AppEvent) => void) {
   return ctx?.connected ?? false;
 }
 
-type Controls = { ai_enabled: boolean; sending_enabled: boolean; in_flight: number; queued: number };
+type Controls = { ai_enabled: boolean; sending_enabled: boolean; in_flight: number; queued: number; automation_ok: boolean };
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const listeners = useRef(new Set<(e: AppEvent) => void>());
@@ -49,6 +49,8 @@ function ShellInner({ children, connected }: { children: React.ReactNode; connec
     } catch { /* shown elsewhere */ }
   }, [api]);
   useEffect(() => { load(); }, [load]);
+  // The automation heartbeat changes without an event: re-check every minute.
+  useEffect(() => { const t = setInterval(load, 60_000); return () => clearInterval(t); }, [load]);
   useAppEvents((e) => { if (['global_controls', 'alert', 'reconnected'].includes(e.type)) load(); });
 
   async function apply() {
@@ -89,6 +91,11 @@ function ShellInner({ children, connected }: { children: React.ReactNode; connec
             {alerts > 0 && <Link className="pill" href="/operations" title="Open alerts">⚠ {alerts} alert{alerts > 1 ? 's' : ''}</Link>}
             {controls && (
               <>
+                {!controls.automation_ok && (
+                  <span className="pill status-warning" role="status" title="The n8n workflow has not reported in the last 3 minutes: nothing is being sent or answered automatically.">
+                    ⚠ Automation offline
+                  </span>
+                )}
                 <span className="pill" aria-live="polite">AI replies: <strong>{controls.ai_enabled ? 'On' : 'Off'}</strong></span>
                 {can('global_ai') && (
                   <button className="btn small" onClick={() => setConfirm({ kind: 'ai', next: !controls.ai_enabled })}>

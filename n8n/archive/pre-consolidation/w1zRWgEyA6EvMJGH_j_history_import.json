@@ -1,0 +1,293 @@
+{
+ "id": "w1zRWgEyA6EvMJGH",
+ "name": "WA · J History Import",
+ "description": "WhatsApp support: one-off import of earlier WhatsApp history for known conversations (stored as historical; never answered).",
+ "active": false,
+ "versionId": "4ed5ed0b-134c-4b16-b0c4-451e46e6dbc3",
+ "updatedAt": "2026-09-25T13:25:33.848Z",
+ "settings": {
+  "executionOrder": "v1",
+  "availableInMCP": true,
+  "saveDataSuccessExecution": "none"
+ },
+ "nodes": [
+  {
+   "id": "256e401d-b2e9-42ab-aa03-6d63a42ac476",
+   "name": "Run Import",
+   "type": "n8n-nodes-base.manualTrigger",
+   "typeVersion": 1,
+   "position": [
+    0,
+    0
+   ],
+   "parameters": {}
+  },
+  {
+   "id": "370af4d1-e0df-428d-a64e-15f18606ac67",
+   "name": "History Targets",
+   "type": "n8n-nodes-base.postgres",
+   "typeVersion": 2.6,
+   "position": [
+    224,
+    0
+   ],
+   "parameters": {
+    "operation": "executeQuery",
+    "query": "SELECT x AS t FROM jsonb_array_elements(app.history_import_targets(200)) x",
+    "options": {}
+   }
+  },
+  {
+   "id": "81da599e-ccbe-4a86-8d52-14f9b27b7cbd",
+   "name": "Import Each",
+   "type": "n8n-nodes-base.executeWorkflow",
+   "typeVersion": 1.2,
+   "position": [
+    448,
+    0
+   ],
+   "parameters": {
+    "source": "database",
+    "workflowId": {
+     "__rl": true,
+     "mode": "id",
+     "value": "={{ $workflow.id }}"
+    },
+    "mode": "each",
+    "options": {
+     "waitForSubWorkflow": true
+    }
+   }
+  },
+  {
+   "id": "41c4381e-ebf5-476f-a4a4-b428b454614d",
+   "name": "History Target Input",
+   "type": "n8n-nodes-base.executeWorkflowTrigger",
+   "typeVersion": 1.1,
+   "position": [
+    0,
+    224
+   ],
+   "parameters": {
+    "inputSource": "passthrough"
+   }
+  },
+  {
+   "id": "a030cddf-3679-464c-9538-1061eba584d5",
+   "name": "History Target",
+   "type": "n8n-nodes-base.set",
+   "typeVersion": 3.4,
+   "position": [
+    224,
+    224
+   ],
+   "parameters": {
+    "mode": "raw",
+    "jsonOutput": "={{ JSON.stringify($json.t || $json) }}",
+    "options": {}
+   }
+  },
+  {
+   "id": "d0aa4053-f821-4d37-bc95-56f10cb4178f",
+   "name": "Fetch History Page",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    672,
+    224
+   ],
+   "parameters": {
+    "method": "GET",
+    "url": "={{ 'https://zernio.com/api/v1/inbox/conversations/' + encodeURIComponent($('History Target').first().json.provider_conversation_id) + '/messages' }}",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpCustomAuth",
+    "sendQuery": true,
+    "queryParameters": {
+     "parameters": [
+      {
+       "name": "accountId",
+       "value": "={{ $('History Target').first().json.provider_account_id }}"
+      },
+      {
+       "name": "limit",
+       "value": "100"
+      }
+     ]
+    },
+    "options": {
+     "timeout": 30000,
+     "response": {
+      "response": {
+       "fullResponse": false,
+       "neverError": true
+      }
+     },
+     "pagination": {
+      "pagination": {
+       "paginationMode": "updateAParameterInEachRequest",
+       "parameters": {
+        "parameters": [
+         {
+          "type": "qs",
+          "name": "cursor",
+          "value": "={{ $response.body.pagination && $response.body.pagination.nextCursor }}"
+         }
+        ]
+       },
+       "paginationCompleteWhen": "other",
+       "completeExpression": "={{ !($response.body.pagination && $response.body.pagination.hasMore) }}",
+       "limitPagesFetched": true,
+       "maxRequests": 50,
+       "requestInterval": 300
+      }
+     }
+    }
+   },
+   "onError": "continueRegularOutput",
+   "credentials": {
+    "httpCustomAuth": {
+     "id": "NAWZ1V27MYMGkozE",
+     "name": "Custom Auth account"
+    }
+   }
+  },
+  {
+   "id": "a03d80ea-71b3-4117-b989-322bf03bc6d1",
+   "name": "Map History Page",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    896,
+    224
+   ],
+   "parameters": {
+    "jsCode": "// WA · J History Import — \"Map History Page\"\n// Input: pages of GET /v1/inbox/conversations/{id}/messages for ONE known\n// conversation (cursor pagination). Each page becomes one call to the\n// backend's /api/internal/history-import, which stores the messages as\n// historical: they are shown to staff but never routed or answered.\n\nconst t = $('History Target').first().json;\nconst out = [];\nfor (const it of $input.all()) {\n  const page = it.json && it.json.body ? it.json.body : it.json;\n  const msgs = Array.isArray(page && page.messages) ? page.messages : [];\n  const mapped = msgs.filter((m) => m && m.id && m.createdAt && (m.direction === 'incoming' || m.direction === 'outgoing')).slice(0, 100).map((m) => {\n    const att = Array.isArray(m.attachments) && m.attachments[0] ? m.attachments[0].type : null;\n    const kinds = ['image', 'audio', 'video', 'file', 'sticker', 'template'];\n    return {\n      provider_message_id: String(m.id).slice(0, 300),\n      direction: m.direction,\n      text: typeof m.message === 'string' ? m.message.slice(0, 10000) : null,\n      sent_at: m.createdAt,\n      kind: att && kinds.indexOf(att) >= 0 ? att : (typeof m.message === 'string' && m.message ? 'text' : 'unsupported'),\n    };\n  });\n  if (!mapped.length) continue;\n  out.push({ json: { body: {\n    provider_account_id: t.provider_account_id,\n    provider_conversation_id: t.provider_conversation_id,\n    participant: t.participant,\n    messages: mapped,\n  } } });\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "ed427c7f-4064-4520-b5c0-0794f5d2179b",
+   "name": "Store History Page",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1120,
+    224
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "={{ $('Dashboard URL').first().json.url }}/api/internal/history-import",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpHeaderAuth",
+    "sendBody": true,
+    "contentType": "json",
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify($json.body) }}",
+    "options": {
+     "timeout": 60000,
+     "response": {
+      "response": {
+       "fullResponse": false,
+       "neverError": true
+      }
+     }
+    }
+   },
+   "onError": "continueRegularOutput"
+  },
+  {
+   "id": "17788c79-7559-4078-9d7e-e2e998dd9510",
+   "name": "Dashboard URL",
+   "type": "n8n-nodes-base.postgres",
+   "typeVersion": 2.6,
+   "position": [
+    448,
+    224
+   ],
+   "parameters": {
+    "operation": "executeQuery",
+    "query": "SELECT app.setting('dashboard_url') #>> '{}' AS url",
+    "options": {}
+   },
+   "executeOnce": true
+  }
+ ],
+ "connections": {
+  "Run Import": {
+   "main": [
+    [
+     {
+      "node": "History Targets",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "History Targets": {
+   "main": [
+    [
+     {
+      "node": "Import Each",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "History Target Input": {
+   "main": [
+    [
+     {
+      "node": "History Target",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "History Target": {
+   "main": [
+    [
+     {
+      "node": "Dashboard URL",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Fetch History Page": {
+   "main": [
+    [
+     {
+      "node": "Map History Page",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Map History Page": {
+   "main": [
+    [
+     {
+      "node": "Store History Page",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Dashboard URL": {
+   "main": [
+    [
+     {
+      "node": "Fetch History Page",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ }
+}

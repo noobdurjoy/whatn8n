@@ -1,5 +1,5 @@
 // WA · A2 Media Download — "Check Download"
-// One output item per planned attachment (same order as "Plan Downloads").
+// Checks each download (inputs are in the same order as "Plan Downloads").
 // The bytes go to the database as base64; store_attachment_blob re-checks
 // size, allowed type and the file's magic bytes. Nothing is logged.
 // Expired media (Meta keeps it for a limited time) is marked 'expired' so
@@ -29,4 +29,6 @@ for (let i = 0; i < items.length; i++) {
   if (buf.length > maxBytes) { out.push({ json: { ok: false, attachment_id: plan.attachment_id, status: 'failed', error: 'too_large: ' + buf.length + ' bytes' } }); continue; }
   out.push({ json: { ok: true, attachment_id: plan.attachment_id, mime: ct, data_base64: buf.toString('base64'), max_bytes: maxBytes, allowed: allowed } });
 }
-return out;
+// One item for all downloads: "Save Downloads" stores them in a single
+// database call, so the branch continues exactly once.
+return [{ json: { downloads: out.map((o) => o.json) } }];

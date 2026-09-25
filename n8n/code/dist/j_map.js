@@ -28,4 +28,6 @@ for (const it of $input.all()) {
     messages: mapped,
   } } });
 }
-return out;
+// Always one item back to the import loop, so a conversation without new
+// messages does not stop the loop.
+return out.length ? out : [{ json: { skip: true } }];
