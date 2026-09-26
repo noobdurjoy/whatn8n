@@ -6,9 +6,13 @@
 -- A reply draft carries Approve / Decline buttons; Approve sends exactly that
 -- draft through the normal dispatcher (all send checks still apply).
 
-ALTER TABLE app.admin_notifications ADD COLUMN buttons jsonb;
+BEGIN;
+SET search_path = app, public;
 
-CREATE FUNCTION app.trg_notify_draft() RETURNS trigger LANGUAGE plpgsql AS $$
+-- Idempotent: an earlier run without a transaction created some of these objects.
+ALTER TABLE app.admin_notifications ADD COLUMN IF NOT EXISTS buttons jsonb;
+
+CREATE OR REPLACE FUNCTION app.trg_notify_draft() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE v_kind text; v_sandbox boolean; v_customer text;
 BEGIN
   SELECT kind INTO v_kind FROM app.ai_jobs WHERE id = NEW.ai_job_id;
@@ -33,6 +37,7 @@ BEGIN
   RETURN NEW;
 END $$;
 
+DROP TRIGGER IF EXISTS notify_draft ON app.ai_drafts;
 CREATE TRIGGER notify_draft AFTER INSERT ON app.ai_drafts FOR EACH ROW EXECUTE FUNCTION app.trg_notify_draft();
 
 UPDATE app.settings SET value = jsonb_set(value, '{categories,ai_draft}', '"immediate"')
@@ -124,7 +129,7 @@ END $$;
 -- be the recorded, authorized button press of this admin; the draft action
 -- runs as the staff member linked to that admin (never one chosen by the
 -- caller), through approve_draft / reject_draft with their usual checks.
-CREATE FUNCTION app.telegram_draft_decision(p_update bigint, p_admin uuid, p_data text) RETURNS jsonb
+CREATE OR REPLACE FUNCTION app.telegram_draft_decision(p_update bigint, p_admin uuid, p_data text) RETURNS jsonb
 LANGUAGE plpgsql AS $$
 DECLARE u app.telegram_updates; a app.telegram_admins; v_m text[]; v_draft uuid; v_cmd uuid; r jsonb; d app.ai_drafts;
 BEGIN
@@ -169,3 +174,6 @@ BEGIN
   RETURN r || jsonb_build_object('decision', CASE v_m[1] WHEN 'a' THEN 'approve' ELSE 'decline' END, 'draft_id', v_draft,
                                  'link', app.dashboard_link(d.conversation_id));
 END $$;
+
+INSERT INTO app.schema_migrations (version) VALUES ('0014_draft_notifications');
+COMMIT;
