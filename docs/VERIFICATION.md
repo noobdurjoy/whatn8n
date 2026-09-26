@@ -7,36 +7,46 @@ This page separates three things:
 
 No other test results are claimed.
 
+## Live state (2026-09-26)
+
+- **Workflow:** **Infinity Digital Shop — WhatsApp AI Support** (`CAUTLyiBxlIyAydL` on `n8n.wamsg.site`) is **published**, with 299 nodes. Its error workflow is itself, and only it may call itself. `scripts/verify-n8n-export.mjs` compares an export of the live copy with `n8n/workflow/ids-whatsapp-ai-support.json` and prints **OK**: nodes, parameters, all Code, credentials and connections match.
+- **Database and dashboard:** they run on the shared VPS with `deploy/vps/install.sh`. https://support.wamsg.site/api/health returns `{"ok":true}`. The n8n maintenance heartbeat is `ok`.
+- **Observation mode:**
+  - AI answering is **on** and new conversations start in **COPILOT**, so the AI only writes drafts.
+  - The automatic handoff message is **off**.
+  - Sending is **on**, but only a staff action (a dashboard reply or approval, or a Telegram **✅ Approve & send**) queues a message to a customer.
+  - Each draft reaches the owner on Telegram as "AI draft reply (NOT sent to the customer)", with the customer's message and **Approve / Decline** buttons.
+- **Telegram admin:** @IDSShopAdminBot is authorized for Telegram user id 5553863175, the owner, by numeric id and private chat id. It delivered the go-live notice. Button presses (`callback_query`) are part of the bot's webhook updates.
+
 ## Verified live
 
 | Item | How |
 | --- | --- |
-| OpenRouter chat model `deepseek/deepseek-v4.1-flash` | Real calls: tool calling with the allowlisted tools, structured JSON answers, usage and cost fields. Repeated with **IDS OpenRouter** (below) |
-| Vision model `stealth/space-bunny-alpha` | Chosen by the owner on 2026-09-25 to replace `qwen/qwen3.7-flash`. That model kept answering `{}` or ran out of tokens while reasoning (executions 96, 100–103). The new model was sent a real shop product image with the exact production request (JSON mode, reasoning budget 256, `require_parameters`). It passed executions 107, 108 and 109: validator passed, `product_photo`, and it read "Netflix Gift Card Bangladesh". The live setting `models.vision_model` on the VPS database was switched to it |
-| WooCommerce Store API (public) | Product search, product details and variations for infinitydigitalshop.com, fetched from n8n. Confirmed facts: <ul><li>prices are in minor units (BDT, 2 decimals);</li><li>variation items carry `parent` and `variation`, with empty `attributes`;</li><li>`add_to_cart.url` has the exact variation query.</li></ul> |
-| Connection check with the IDS credentials | **All checks pass** (execution 109, 2026-09-25): chat, vision, Zernio, WooCommerce REST and Store API, PostgreSQL as `wa_n8n` over the private Docker network, backend health and backend token. First run on the instance: execution 98. It sends nothing to WhatsApp and changes nothing. Passed: <ul><li>**IDS OpenRouter** chat (`deepseek/deepseek-v4.1-flash` called `search_products` with `{"query":"netflix"}`, usage returned);</li><li>**IDS OpenRouter** vision (`qwen/qwen3.7-flash` given a real 684 KB shop product image, validator passed, `product_photo`, read "Netflix Gift Card Bangladesh");</li><li>**IDS Zernio** (1 account, 1 WhatsApp account);</li><li>**IDS WooCommerce Read** (REST product read);</li><li>WooCommerce Store API (products with BDT prices).</li></ul>Failed only because they are not deployed yet: PostgreSQL, backend health, backend token. Execution 96 had found that Qwen spent 393 of 400 tokens reasoning and answered `{}`. Both vision requests now use low, hidden reasoning and a 1200-token limit. Execution 97 hit a provider 429; execution 98 passed |
-| Workflow upload | The single workflow **Infinity Digital Shop — WhatsApp AI Support** exists on `n8n.wamsg.site` as `CAUTLyiBxlIyAydL`, **unpublished**. All 292 nodes are present. The Telegram nodes are bound by id to **IDS Telegram Admin** (@IDSShopAdminBot); the model nodes to **IDS OpenRouter**, the Zernio nodes to **IDS Zernio**, the WooCommerce nodes to **IDS WooCommerce Read**, and *Write Stock* alone to **IDS WooCommerce Stock**. No node is bound to another project's credential |
+| Connection check (published workflow) | **All checks pass** (execution 127, 2026-09-26). It sends nothing to WhatsApp and changes nothing. <ul><li>**IDS OpenRouter** chat: `deepseek/deepseek-v4.1-flash` calls `search_products`.</li><li>**IDS OpenRouter** vision: `stealth/space-bunny-alpha` reads a real 684 KB shop product image.</li><li>**IDS Zernio**: 1 WhatsApp account.</li><li>**IDS WooCommerce Read**: REST product read.</li><li>WooCommerce Store API: BDT prices.</li><li>PostgreSQL as `wa_n8n`, over the private Docker network (`ids-wa-db`).</li><li>Backend health and backend token.</li></ul> |
+| Vision model `stealth/space-bunny-alpha` | Chosen by the owner to replace `qwen/qwen3.7-flash`. That model kept answering `{}` or ran out of tokens while reasoning (executions 96, 100–103). The new model got a real shop product image with the exact production request: JSON mode, reasoning budget 256, `require_parameters`. It passed executions 107, 108 and 109: the validator passed, the type was `product_photo`, and it read "Netflix Gift Card Bangladesh". The live setting `models.vision_model` is set to it |
+| OpenRouter chat model `deepseek/deepseek-v4.1-flash` | Tool calling with the allowlisted tools, structured JSON answers, usage and cost fields |
+| WooCommerce Store API (public) | Product search, details and variations for infinitydigitalshop.com. <ul><li>Prices are in minor units (BDT, 2 decimals).</li><li>`add_to_cart.url` carries the exact variation.</li></ul> |
+| Telegram delivery | A `deployment` notification queued in the database was claimed by the published workflow and sent by @IDSShopAdminBot: status `sent` after 1 attempt |
+| Credentials | All 8 IDS credentials exist and are bound by id; no node uses another project's credential. The last three (Postgres, Inbound Token, Backend Token) were created on the VPS from its generated secrets with `n8n import:credentials`, so no secret passed through chat |
+| VPS deployment | `deploy/vps/install.sh` works around the other services on the host: <ul><li>no database port is published;</li><li>the dashboard runs on `127.0.0.1:3110`;</li><li>nginx serves it on `75.119.130.7:443` with a Let's Encrypt certificate;</li><li>migrations 0001–0014 are applied.</li></ul> |
 
 ## Verified locally (real PostgreSQL 16, real n8n, mocked providers)
 
 | Item | How |
 | --- | --- |
-| Schema, migrations 0001–0013, grants | Applied from scratch on every integration test run |
+| Schema, migrations 0001–0014, grants | Applied from scratch on every integration test run |
 | Control rules | Integration tests against the real database cover: <ul><li>dedupe;</li><li>takeover atomicity;</li><li>stale AI results discarded;</li><li>no AI send after takeover;</li><li>emergency stop;</li><li>24 h window;</li><li>unknown send outcomes;</li><li>drafts;</li><li>human-echo origin detection;</li><li>order operations;</li><li>AI budget handoff;</li><li>Telegram pairing, authorization, command capabilities, stock-change locking, notices, notes and notification categories</li></ul> |
-| n8n Code nodes | Every generated Code node runs in unit tests inside a VM that has the n8n sandbox globals. This includes the Telegram parser, the proposed-action validator, stock resolution and planning, and the Write Stock body (only stock fields can be sent) |
-| End-to-end workflow run | `tests/e2e/run.mjs` imports the generated workflow into a local n8n 2.40.7. Around it run PostgreSQL, the Next.js backend and an HTTPS mock of Zernio, OpenRouter, WooCommerce and Telegram. **Run 8: 29 passed, 0 failed.** It covers: <ul><li>customer intake, AUTO, COPILOT and HUMAN;</li><li>vision;</li><li>dispatch refusals;</li><li>Telegram pairing and unauthorized users;</li><li>forwarded messages ignored;</li><li>stock set/add/out-of-stock with read-back;</li><li>ambiguous products;</li><li>Remember/Temporary/Note;</li><li>Telegram reply through the dispatcher (with takeover);</li><li>notifications;</li><li>the connection check;</li><li>no secrets in execution data</li></ul> |
-| Totals | `npm run typecheck` clean; `npm test` **255 tests passing** |
+| Draft buttons (0014) | <ul><li>The draft notification carries Approve and Decline.</li><li>Approve queues exactly that draft, once; a second press is refused as `draft_approved`.</li><li>Decline rejects the draft.</li><li>A stale draft is refused as `stale_draft`, with nothing queued.</li><li>A stranger's button press is rejected before any decision.</li><li>A text update cannot be replayed as a button press.</li><li>The workflow role still cannot call `approve_draft` directly.</li></ul> |
+| n8n Code nodes | Every generated Code node runs in unit tests inside a VM that has the n8n sandbox globals. This includes button-press input reduction and the Telegram reply texts |
+| End-to-end workflow run | `tests/e2e/run.mjs`: local n8n 2.40.7, PostgreSQL, the Next.js backend, and HTTPS mocks of Zernio, OpenRouter, WooCommerce and Telegram. **Run 8: 29 passed, 0 failed.** The draft buttons were added after run 8 and are covered by the integration tests above |
+| Dashboard | Redesigned (2026-09-26). Built with `next build` and checked in a real browser (Playwright/Chromium) against the e2e database in light, dark and mobile (390 px) layouts. Screenshots are in `docs/screenshots/` |
+| Totals | `npm run typecheck` clean; `npm test` **259 tests passing** |
 
 ## Not yet exercised
 
-Each of these needs the owner's credentials or a deployment.
-
 | Item | Why | What to do |
 | --- | --- | --- |
-| IDS credentials | All 8 exist and are bound by id. The last three were created on the VPS from the generated secrets with `n8n import:credentials`, so no value passed through chat | SETUP §5; then send the credential names back so the nodes can be bound by id |
-| Telegram bot | No bot token yet, so the bot username is unknown and pairing is untested live | Create the bot with @BotFather, store its token as **IDS Telegram Admin**, then pair (SETUP §6a) |
-| Database and dashboard hosting | Deployed with `deploy/vps/install.sh`. https://support.wamsg.site/api/health returns `{"ok":true}` | — |
-| Zernio webhook, send, media, message list | Built from Zernio's published spec; no live message sent | Go-live checklist with a test phone. Keep automatic replies off until COPILOT is verified |
-| WooCommerce stock write | The Read/Write key exists but has not written anything; stock writes were tested only against the mock | After go-live, run one stock change on a test product from Telegram |
-| Connection check on the instance | Needs the credentials above | Run "Run Connection Check"; every row must show `ok: true` |
-| Publishing and error workflow | Publish only after the checks above pass. The error workflow can be set only after publishing. (The 14 old `WA ·` workflows and the earlier draft were never published and have been archived at the owner's request; only this workflow and the Facebook + Instagram autopost remain.) | SETUP §6 |
+| Zernio webhook (inbound WhatsApp) | The webhook must be added in the Zernio dashboard. There is no verified API for it here, and an existing webhook of another integration must not be overwritten. Until it exists, no customer message reaches the system | In Zernio, add a webhook to `https://support.wamsg.site/api/webhooks/zernio` with the `ZERNIO_WEBHOOK_SECRET` from `/opt/ids-whatsapp/n8n-credentials.txt` (SETUP §7) |
+| Zernio send, media and message list with a real customer | Built from Zernio's published spec; nothing has been sent to a customer | The first **Approve & send** on a real draft is the first live send; try it first with a test phone |
+| Approve / Decline on a real draft | Depends on the Zernio webhook above | After the webhook exists, message the shop from a test phone and press the buttons |
+| WooCommerce stock write | The Read/Write key exists but has not written anything; stock writes were tested only against the mock | Run one stock change on a test product from Telegram |

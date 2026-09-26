@@ -135,6 +135,27 @@ Example commands (English, Bangla or Banglish):
 - `Reply to 017XXXXXXXX: your exact message` (sent as a human reply; AI stops for that chat)
 - `/status` · `cancel`
 
+### 6b. Observation mode (AI drafts on Telegram)
+
+The recommended way to start. AI answering is on and new conversations start in **COPILOT**, so the AI never sends; it only writes drafts:
+- `ai_enabled = true`, `default_mode = COPILOT`;
+- `handoff_ack.enabled = false`, so no automatic handoff message goes out;
+- the Telegram category **AI draft replies (not sent)** set to *immediate*.
+
+Each draft arrives on Telegram with the customer's message and two buttons:
+- **✅ Approve & send** queues exactly that draft as a staff reply through the normal dispatcher. The 24-hour window, the emergency stop and the other send checks still apply. If the customer has written again since the draft, it is not sent; a newer draft follows.
+- **❌ Decline** discards the draft.
+
+Only a paired owner or admin, identified by numeric Telegram id and private chat, can press them. Each press is recorded once and cannot be replayed.
+
+### 6c. Maintenance access over HTTPS (optional)
+
+`deploy/vps/remote-access.sh on` lets a maintenance session that can only use HTTPS reach SSH through `wss://support.wamsg.site/_ops/ssh`. Login still needs a key in `~/.ssh/authorized_keys`; there is no password and no new account. Turn it off when done:
+
+```bash
+bash /opt/ids-whatsapp/deploy/vps/remote-access.sh off
+```
+
 ## 7. Zernio webhook
 
 In Zernio, add a webhook to `https://<APP_ORIGIN>/api/webhooks/zernio` with the same secret as `ZERNIO_WEBHOOK_SECRET`. Subscribe to:
