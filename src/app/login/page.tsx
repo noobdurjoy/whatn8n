@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { BrandMark, IconCheck } from '@/components/icons';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -22,19 +23,39 @@ export default function LoginPage() {
   }
 
   return (
-    <main style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 16 }}>
-      <form onSubmit={submit} className="card stack" style={{ width: 'min(380px, 100%)' }} aria-labelledby="login-title">
-        <h1 id="login-title">WhatsApp Support</h1>
-        <p className="muted small">Sign in with your staff account.</p>
-        <label className="stack small">Email
-          <input className="input" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} />
-        </label>
-        <label className="stack small">Password
-          <input className="input" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-        </label>
-        {error && <div className="error-box" role="alert">{error}</div>}
-        <button className="btn primary" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-      </form>
+    <main className="auth">
+      <section className="auth-hero" aria-hidden="true">
+        <div className="row" style={{ gap: 10 }}>
+          <span className="brand-mark"><BrandMark /></span>
+          <strong>Infinity Digital Shop</strong>
+        </div>
+        <div>
+          <h1>Every WhatsApp customer, answered well.</h1>
+          <p>One place for your team to read, approve and send replies, with AI drafts that never leave without your say-so.</p>
+          <ul>
+            <li><IconCheck /> Live prices and stock straight from the shop</li>
+            <li><IconCheck /> AI drafts you approve from here or from Telegram</li>
+            <li><IconCheck /> Emergency stop and full audit trail for every send</li>
+          </ul>
+        </div>
+        <p className="small" style={{ opacity: .7 }}>Staff access only. Activity is logged.</p>
+      </section>
+      <section className="auth-main">
+        <form onSubmit={submit} className="auth-card" aria-labelledby="login-title">
+          <div>
+            <h2 id="login-title">Sign in</h2>
+            <p className="muted small" style={{ margin: '4px 0 0' }}>Use your staff account for the support desk.</p>
+          </div>
+          <label className="stack small">Email
+            <input className="input" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+          </label>
+          <label className="stack small">Password
+            <input className="input" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          {error && <div className="error-box" role="alert">{error}</div>}
+          <button className="btn primary" type="submit" disabled={busy} style={{ minHeight: 42 }}>{busy ? 'Signing in…' : 'Sign in'}</button>
+        </form>
+      </section>
     </main>
   );
 }

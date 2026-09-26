@@ -26,9 +26,9 @@ export default function SettingsPage() {
   ];
   return (
     <div className="page"><div className="page-narrow stack">
-      <h1>Settings</h1>
-      <div className="row" role="tablist" aria-label="Settings sections">
-        {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={`btn small ${tab === k ? 'primary' : ''}`} onClick={() => setTab(k)}>{l}</button>)}
+      <div className="page-head"><div><h1>Settings</h1><p className="small">Behaviour, AI models, prompts, staff and the Telegram admin bot.</p></div></div>
+      <div className="tabs" role="tablist" aria-label="Settings sections">
+        {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className="tab" onClick={() => setTab(k)}>{l}</button>)}
       </div>
       {tab === 'settings' && <SettingsEditor />}
       {tab === 'prompts' && <Prompts />}

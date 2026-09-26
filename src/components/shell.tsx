@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useApi, useEvents, useSession } from './session';
+import { Avatar, BrandMark, IconBook, IconChart, IconInbox, IconLogout, IconSettings } from './icons';
 
 type AppEvent = { type: string; conversation_id?: string; [k: string]: unknown };
 const EventsCtx = createContext<{ subscribe: (fn: (e: AppEvent) => void) => () => void; connected: boolean } | null>(null);
@@ -64,10 +65,10 @@ function ShellInner({ children, connected }: { children: React.ReactNode; connec
   }
 
   const nav = [
-    { href: '/', label: 'Inbox' },
-    { href: '/knowledge', label: 'Knowledge' },
-    ...(can('view_metrics') ? [{ href: '/operations', label: 'Operations' }] : []),
-    ...(can('settings') || can('prompts') ? [{ href: '/settings', label: 'Settings' }] : []),
+    { href: '/', label: 'Inbox', icon: <IconInbox /> },
+    { href: '/knowledge', label: 'Knowledge', icon: <IconBook /> },
+    ...(can('view_metrics') ? [{ href: '/operations', label: 'Operations', icon: <IconChart /> }] : []),
+    ...(can('settings') || can('prompts') ? [{ href: '/settings', label: 'Settings', icon: <IconSettings /> }] : []),
   ];
 
   return (
@@ -77,16 +78,19 @@ function ShellInner({ children, connected }: { children: React.ReactNode; connec
           <div className="banner-stop" role="alert">All outgoing messages are stopped. Incoming messages are still being saved.</div>
         )}
         <header className="topbar">
-          <strong>WhatsApp Support</strong>
+          <Link href="/" className="brand" aria-label="Infinity Digital Shop support desk">
+            <span className="brand-mark"><BrandMark /></span>
+            <span className="brand-name"><strong>Infinity Digital Shop</strong><span>WhatsApp support desk</span></span>
+          </Link>
           <nav aria-label="Main">
             {nav.map((n) => (
-              <Link key={n.href} href={n.href} aria-current={(n.href === '/' ? path === '/' : path.startsWith(n.href)) ? 'page' : undefined}>{n.label}</Link>
+              <Link key={n.href} href={n.href} aria-current={(n.href === '/' ? path === '/' : path.startsWith(n.href)) ? 'page' : undefined}>{n.icon}{n.label}</Link>
             ))}
           </nav>
           <span className="spacer" />
           <div className="global-controls">
-            <span className={`small ${connected ? 'status-good' : 'status-warning'}`} title="Live updates">
-              {connected ? '● Live' : '○ Reconnecting…'}
+            <span className={`live ${connected ? 'status-good' : 'status-warning'}`} title="Live updates">
+              <span className={`dot${connected ? ' pulse' : ''}`} />{connected ? 'Live' : 'Reconnecting…'}
             </span>
             {alerts > 0 && <Link className="pill" href="/operations" title="Open alerts">⚠ {alerts} alert{alerts > 1 ? 's' : ''}</Link>}
             {controls && (
@@ -96,7 +100,7 @@ function ShellInner({ children, connected }: { children: React.ReactNode; connec
                     ⚠ Automation offline
                   </span>
                 )}
-                <span className="pill" aria-live="polite">AI replies: <strong>{controls.ai_enabled ? 'On' : 'Off'}</strong></span>
+                <span className={`pill ${controls.ai_enabled ? 'status-good' : ''}`} aria-live="polite">AI replies: <strong>{controls.ai_enabled ? 'On' : 'Off'}</strong></span>
                 {can('global_ai') && (
                   <button className="btn small" onClick={() => setConfirm({ kind: 'ai', next: !controls.ai_enabled })}>
                     {controls.ai_enabled ? 'Turn AI off' : 'Turn AI on'}
@@ -109,15 +113,19 @@ function ShellInner({ children, connected }: { children: React.ReactNode; connec
                 )}
               </>
             )}
-            <span className="small muted">{me.display_name} · {me.role}</span>
-            <button className="btn small" onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); window.location.href = '/login'; }}>Sign out</button>
+            <span className="user-chip">
+              <Avatar name={me.display_name} />
+              <span className="who"><strong>{me.display_name}</strong><span>{me.role}</span></span>
+              <button className="btn small ghost" title="Sign out" aria-label="Sign out"
+                onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); window.location.href = '/login'; }}><IconLogout /></button>
+            </span>
           </div>
         </header>
       </div>
       <div style={{ minHeight: 0 }}>{children}</div>
 
       {confirm && (
-        <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'grid', placeItems: 'center', zIndex: 20, padding: 16 }}
+        <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" className="modal-backdrop"
           onKeyDown={(e) => { if (e.key === 'Escape') setConfirm(null); }}>
           <div className="card stack" style={{ width: 'min(460px, 100%)' }}>
             <h2 id="confirm-title">

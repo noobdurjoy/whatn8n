@@ -45,8 +45,8 @@ export default function OperationsPage() {
   const b = health?.backlog;
   return (
     <div className="page"><div className="page-narrow stack">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1>Operations</h1>
+      <div className="page-head">
+        <div><h1>Operations</h1><p className="small">Health, alerts, send outcomes and response metrics.</p></div>
         <label className="row small">Period
           <select className="input" style={{ width: 120 }} value={days} onChange={(e) => setDays(Number(e.target.value))}>
             <option value={1}>24 hours</option><option value={7}>7 days</option><option value={30}>30 days</option>

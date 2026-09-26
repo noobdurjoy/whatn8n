@@ -21,8 +21,8 @@ export default function KnowledgePage() {
   if (!data) return <div className="page">{err ? <div className="error-box">{err}</div> : 'Loading…'}</div>;
   return (
     <div className="page"><div className="page-narrow stack">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1>Knowledge</h1>
+      <div className="page-head">
+        <div><h1>Knowledge</h1><p className="small">What the AI may tell customers: FAQs, procedures and policies.</p></div>
         {data.can_review && <button className="btn primary" onClick={() => setEditing({ category: 'faq', title: '', body: '', slug: '' })}>New entry</button>}
       </div>
       <p className="muted small">Only published, approved entries are used by the AI. Prices, stock and order status are always read live from WooCommerce and should not be written here.</p>

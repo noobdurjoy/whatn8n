@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { containsBangla, fmtTime, langAttr, useApi, useSession } from './session';
+import { Avatar, IconChat } from './icons';
 import { useAppEvents } from './shell';
 
 type ConvRow = {
@@ -118,10 +119,16 @@ export function Inbox() {
         </div>
         {listErr && <div className="error-box" role="alert" style={{ margin: 10 }}>{listErr}</div>}
         <div role="list" onKeyDown={onListKey}>
-          {rows.length === 0 && !listErr && <p className="muted small" style={{ padding: 12 }}>No conversations match.</p>}
+          {rows.length === 0 && !listErr && (
+            <div className="empty-state" style={{ height: 'auto', paddingTop: 40 }}>
+              <div><strong style={{ color: 'var(--text)' }}>No conversations here yet</strong>
+                <p className="small" style={{ margin: '4px 0 0' }}>New WhatsApp chats appear the moment a customer writes.</p></div>
+            </div>)}
           {rows.map((r) => (
             <button id={`conv-${r.id}`} key={r.id} role="listitem" className="conv-item" aria-current={r.id === selected ? 'true' : undefined}
               onClick={() => select(r.id)}>
+              <Avatar name={r.customer_name || r.phone_e164} />
+              <div className="conv-body">
               <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'nowrap' }}>
                 <span className="name" lang={containsBangla(r.customer_name) ? 'bn' : undefined}>{r.customer_name || r.phone_e164 || 'Unknown customer'}</span>
                 <span className="small muted">{fmtTime(r.last_message_at)}</span>
@@ -137,6 +144,7 @@ export function Inbox() {
                 {r.assigned_name && <span className="muted">→ {r.assigned_name}</span>}
                 {r.unread_count > 0 && <span className="badge" aria-label={`${r.unread_count} unread`}>{r.unread_count}</span>}
               </div>
+              </div>
             </button>
           ))}
         </div>
@@ -144,7 +152,13 @@ export function Inbox() {
 
       <section className="pane thread-pane" aria-label="Conversation" style={{ borderRight: '1px solid var(--border)' }}>
         {selected ? <Conversation key={selected} id={selected} onBack={() => setSelected(null)} onToggleProfile={() => setShowProfile((v) => !v)} />
-          : <div style={{ display: 'grid', placeItems: 'center', height: '100%' }} className="muted">Select a conversation</div>}
+          : <div className="empty-state">
+              <div>
+                <div className="icon"><IconChat /></div>
+                <h2>Select a conversation</h2>
+                <p className="small" style={{ margin: 0 }}>Pick a chat on the left. AI drafts wait here and on Telegram for your approval.</p>
+              </div>
+            </div>}
       </section>
 
       <aside className="pane profile-pane" aria-label="Customer">
@@ -196,7 +210,7 @@ function Conversation({ id, onBack, onToggleProfile }: { id: string; onBack: () 
   }
 
   if (err) return <div className="error-box" role="alert" style={{ margin: 12 }}>{err}</div>;
-  if (!d) return <div className="muted" style={{ padding: 16 }}>Loading…</div>;
+  if (!d) return <div className="empty-state"><span className="small">Loading conversation…</span></div>;
   const c = d.conversation;
   const cu = d.customer;
 
@@ -216,7 +230,11 @@ function Conversation({ id, onBack, onToggleProfile }: { id: string; onBack: () 
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <div className="row">
             <button className="btn small back-link" onClick={onBack} aria-label="Back to conversations">←</button>
-            <h1 style={{ margin: 0 }} lang={containsBangla(cu?.display_name) ? 'bn' : undefined}>{cu?.display_name || cu?.phone_e164 || 'Customer'}</h1>
+            <Avatar name={cu?.display_name || cu?.phone_e164} large />
+            <div style={{ lineHeight: 1.2 }}>
+              <h1 style={{ margin: 0, fontSize: 17 }} lang={containsBangla(cu?.display_name) ? 'bn' : undefined}>{cu?.display_name || cu?.phone_e164 || 'Customer'}</h1>
+              {cu?.display_name && cu?.phone_e164 && <span className="small muted">{cu.phone_e164}</span>}
+            </div>
             <span className={`pill ${c.mode}`} aria-label={`Mode ${c.mode}`}>{c.mode}</span>
             {c.window_open ? <span className="pill status-good" title="WhatsApp customer-service window">24h window open</span>
               : <span className="pill status-warning" title="Only approved templates can be sent">Window closed · templates only</span>}
